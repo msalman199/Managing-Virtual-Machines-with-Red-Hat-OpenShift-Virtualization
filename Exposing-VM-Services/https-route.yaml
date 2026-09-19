@@ -1,0 +1,18 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: web-server-https-route
+  namespace: default
+  labels:
+    app: web-server
+spec:
+  to:
+    kind: Service
+    name: web-server-clusterip
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
