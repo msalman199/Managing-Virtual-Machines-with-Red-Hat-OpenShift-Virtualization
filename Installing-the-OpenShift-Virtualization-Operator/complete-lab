@@ -1,0 +1,328 @@
+Lab 1: Installing the OpenShift Virtualization Operator
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the role of the OpenShift Virtualization Operator in managing virtual machines
+Install the OpenShift Virtualization Operator using both CLI and Web Console methods
+Verify the successful installation by checking KubeVirt Custom Resource Definitions (CRDs)
+Validate that all required resources are properly deployed and running
+Troubleshoot common installation issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of OpenShift/Kubernetes concepts
+Familiarity with command-line interface operations
+Knowledge of YAML file structure
+Understanding of operators and Custom Resource Definitions (CRDs)
+Access to an OpenShift cluster with cluster-admin privileges
+Required Tools
+OpenShift CLI (oc) tool installed and configured
+Web browser for accessing OpenShift Web Console
+Text editor for viewing and editing YAML files
+Lab Environment Setup
+Good News! Al Nafi provides ready-to-use Linux-based cloud machines with OpenShift cluster access pre-configured. Simply click Start Lab to begin - no need to build your own virtual machine or install additional software.
+
+Your lab environment includes:
+
+Pre-configured OpenShift cluster
+OpenShift CLI (oc) tool ready to use
+Web Console access
+All necessary permissions for operator installation
+Task 1: Install OpenShift Virtualization Operator via Web Console
+Subtask 1.1: Access the OpenShift Web Console
+Open your web browser and navigate to the OpenShift Web Console URL provided in your lab environment
+
+Log in using the credentials provided:
+
+Username: [provided in lab environment]
+Password: [provided in lab environment]
+Verify you have cluster-admin access by checking the top-right corner shows your username with administrative privileges
+
+Subtask 1.2: Navigate to OperatorHub
+In the left navigation menu, click on Operators
+
+Select OperatorHub from the dropdown menu
+
+You will see the OperatorHub catalog with various operators available for installation
+
+Subtask 1.3: Search and Select OpenShift Virtualization Operator
+In the search box at the top of the OperatorHub page, type:
+
+OpenShift Virtualization
+Click on the OpenShift Virtualization operator tile (it should show Red Hat as the provider)
+
+Review the operator details including:
+
+Description
+Supported OpenShift versions
+Capabilities
+Required permissions
+Subtask 1.4: Install the Operator
+Click the Install button
+
+On the installation page, configure the following settings:
+
+Update Channel: Select stable (recommended for production)
+Installation Mode: Choose All namespaces on the cluster
+Installed Namespace: Select openshift-cnv (this will be created automatically)
+Update Approval: Select Automatic for this lab
+Click Install to begin the installation process
+
+Wait for the installation to complete. You should see a green checkmark and "Succeeded" status
+
+Subtask 1.5: Verify Installation via Web Console
+Navigate to Operators > Installed Operators
+
+Ensure you're viewing All Projects or specifically the openshift-cnv project
+
+Verify that OpenShift Virtualization appears in the list with status Succeeded
+
+Click on the operator name to view its details and available APIs
+
+Task 2: Install OpenShift Virtualization Operator via CLI
+Note: If you completed Task 1, you can skip this task or uninstall the operator first to practice CLI installation.
+
+Subtask 2.1: Prepare CLI Environment
+Open a terminal in your lab environment
+
+Verify OpenShift CLI is installed and you're logged in:
+
+oc version
+oc whoami
+Check your current context and ensure you have cluster-admin privileges:
+
+oc auth can-i create operators --all-namespaces
+Subtask 2.2: Create Namespace for OpenShift Virtualization
+Create the required namespace:
+
+oc create namespace openshift-cnv
+Verify the namespace was created:
+
+oc get namespaces | grep openshift-cnv
+Subtask 2.3: Create OperatorGroup
+Create an OperatorGroup YAML file:
+
+cat > cnv-operatorgroup.yaml << EOF
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kubevirt-hyperconverged-group
+  namespace: openshift-cnv
+spec:
+  targetNamespaces:
+  - openshift-cnv
+EOF
+Apply the OperatorGroup:
+
+oc apply -f cnv-operatorgroup.yaml
+Verify the OperatorGroup was created:
+
+oc get operatorgroup -n openshift-cnv
+Subtask 2.4: Create Subscription
+Create a Subscription YAML file:
+
+cat > cnv-subscription.yaml << EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: hco-operatorhub
+  namespace: openshift-cnv
+spec:
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  name: kubevirt-hyperconverged
+  channel: stable
+EOF
+Apply the Subscription:
+
+oc apply -f cnv-subscription.yaml
+Verify the subscription was created:
+
+oc get subscription -n openshift-cnv
+Subtask 2.5: Monitor Installation Progress
+Watch the ClusterServiceVersion (CSV) installation:
+
+oc get csv -n openshift-cnv -w
+Wait until the CSV shows Succeeded phase (this may take several minutes)
+
+Check the operator pod status:
+
+oc get pods -n openshift-cnv
+Task 3: Verify Installation by Checking KubeVirt CRDs and Resources
+Subtask 3.1: Check Custom Resource Definitions
+List all KubeVirt-related CRDs:
+
+oc get crd | grep kubevirt
+Look for these specific CRDs:
+
+oc get crd | grep -E "(virtualmachines|virtualmachineinstances|hyperconvergeds)"
+Get detailed information about the VirtualMachine CRD:
+
+oc describe crd virtualmachines.kubevirt.io
+Subtask 3.2: Verify HyperConverged Custom Resource
+Check if HyperConverged CR exists:
+
+oc get hyperconverged -n openshift-cnv
+If it doesn't exist, create it:
+
+cat > hyperconverged-cr.yaml << EOF
+apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: openshift-cnv
+spec: {}
+EOF
+Apply the HyperConverged CR:
+
+oc apply -f hyperconverged-cr.yaml
+Monitor the HyperConverged deployment:
+
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv -o yaml
+Subtask 3.3: Verify KubeVirt Components
+Check KubeVirt deployment status:
+
+oc get kubevirt -n openshift-cnv
+Verify all KubeVirt pods are running:
+
+oc get pods -n openshift-cnv
+Check for these essential components:
+
+virt-api
+virt-controller
+virt-handler (DaemonSet)
+virt-operator
+Verify the virt-handler DaemonSet is running on all nodes:
+
+oc get daemonset -n openshift-cnv
+Subtask 3.4: Test API Accessibility
+Test if you can access VirtualMachine resources:
+
+oc get virtualmachines --all-namespaces
+Test VirtualMachineInstance access:
+
+oc get virtualmachineinstances --all-namespaces
+Check available API resources:
+
+oc api-resources | grep kubevirt
+Task 4: Final Verification and Health Check
+Subtask 4.1: Comprehensive Status Check
+Create a comprehensive status check script:
+
+cat > verify-cnv-installation.sh << 'EOF'
+#!/bin/bash
+
+echo "=== OpenShift Virtualization Installation Verification ==="
+echo
+
+echo "1. Checking namespace..."
+oc get namespace openshift-cnv
+echo
+
+echo "2. Checking operator installation..."
+oc get csv -n openshift-cnv
+echo
+
+echo "3. Checking HyperConverged status..."
+oc get hyperconverged -n openshift-cnv
+echo
+
+echo "4. Checking KubeVirt status..."
+oc get kubevirt -n openshift-cnv
+echo
+
+echo "5. Checking all pods status..."
+oc get pods -n openshift-cnv
+echo
+
+echo "6. Checking CRDs..."
+oc get crd | grep kubevirt | wc -l
+echo "KubeVirt CRDs found"
+echo
+
+echo "7. Checking node readiness for virtualization..."
+oc get nodes -o wide
+echo
+
+echo "=== Verification Complete ==="
+EOF
+Make the script executable and run it:
+
+chmod +x verify-cnv-installation.sh
+./verify-cnv-installation.sh
+Subtask 4.2: Check Feature Gates and Capabilities
+Verify that virtualization features are enabled:
+
+oc get hyperconverged kubevirt-hyperconverged -n openshift-cnv -o jsonpath='{.status.conditions}' | jq .
+Check if the cluster supports virtualization:
+
+oc describe nodes | grep -i "kvm\|virtualization"
+Troubleshooting Common Issues
+Issue 1: Operator Installation Stuck
+Symptoms: CSV remains in "Installing" phase for extended time
+
+Solution:
+
+# Check operator logs
+oc logs -n openshift-cnv deployment/hyperconverged-cluster-operator
+
+# Check for resource constraints
+oc describe nodes | grep -A 5 "Allocated resources"
+Issue 2: Pods in CrashLoopBackOff
+Symptoms: KubeVirt pods failing to start
+
+Solution:
+
+# Check pod logs
+oc logs -n openshift-cnv <pod-name>
+
+# Check node compatibility
+oc get nodes -o yaml | grep -i "feature\|cpu"
+Issue 3: Missing CRDs
+Symptoms: VirtualMachine CRDs not found
+
+Solution:
+
+# Restart the operator
+oc delete pod -n openshift-cnv -l name=hyperconverged-cluster-operator
+
+# Check operator subscription
+oc get subscription -n openshift-cnv -o yaml
+Validation Commands Summary
+Use these commands to quickly validate your installation:
+
+# Quick health check
+oc get csv -n openshift-cnv
+oc get hyperconverged -n openshift-cnv
+oc get pods -n openshift-cnv
+oc get crd | grep kubevirt
+
+# Test API access
+oc get virtualmachines --all-namespaces
+oc api-resources | grep kubevirt
+Conclusion
+Congratulations! You have successfully completed Lab 1: Installing the OpenShift Virtualization Operator.
+
+What You Accomplished
+In this lab, you:
+
+Learned two installation methods: You now understand how to install the OpenShift Virtualization Operator using both the Web Console (GUI) and CLI approaches
+Mastered operator lifecycle management: You gained hands-on experience with OperatorHub, subscriptions, and operator deployment processes
+Verified installation success: You learned how to systematically check that all components are properly installed and running
+Understood KubeVirt architecture: You explored the relationship between CRDs, operators, and virtualization resources
+Developed troubleshooting skills: You learned how to identify and resolve common installation issues
+Why This Matters
+The OpenShift Virtualization Operator is the foundation for running virtual machines alongside containers in OpenShift. This capability enables:
+
+Hybrid workload management: Run both VMs and containers on the same platform
+Legacy application modernization: Gradually migrate traditional VMs to cloud-native architectures
+Resource optimization: Better utilize cluster resources by mixing workload types
+Simplified operations: Manage VMs using the same tools and processes as containers
+Next Steps
+With the OpenShift Virtualization Operator successfully installed, you're now ready to:
+
+Create and manage virtual machines
+Configure storage and networking for VMs
+Implement VM lifecycle management
+Explore advanced virtualization features
+The foundation you've built in this lab will support all future virtualization activities in your OpenShift environment. Well done!
