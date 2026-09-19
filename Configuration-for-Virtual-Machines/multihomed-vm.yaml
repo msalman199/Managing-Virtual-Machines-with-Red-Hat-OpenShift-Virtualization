@@ -1,0 +1,54 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: multihomed-vm
+  namespace: vm-networking-lab
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: multihomed-vm
+      annotations:
+        k8s.v1.cni.cncf.io/networks: bridge-network,macvlan-network
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: bridge-net
+            bridge: {}
+          - name: macvlan-net
+            bridge: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      - name: bridge-net
+        multus:
+          networkName: bridge-network
+      - name: macvlan-net
+        multus:
+          networkName: macvlan-network
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_pwauth: True

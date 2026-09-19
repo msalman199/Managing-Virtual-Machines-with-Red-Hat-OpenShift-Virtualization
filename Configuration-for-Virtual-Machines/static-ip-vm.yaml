@@ -1,0 +1,59 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: static-ip-vm
+  namespace: vm-networking-lab
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: static-ip-vm
+      annotations:
+        k8s.v1.cni.cncf.io/networks: static-ip-network
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: static-net
+            bridge: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      - name: static-net
+        multus:
+          networkName: static-ip-network
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_pwauth: True
+            write_files:
+            - path: /etc/sysconfig/network-scripts/ifcfg-eth1
+              content: |
+                DEVICE=eth1
+                BOOTPROTO=static
+                IPADDR=192.168.100.10
+                NETMASK=255.255.255.0
+                ONBOOT=yes
+            runcmd:
+            - ifup eth1

@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vm-network-policy
+  namespace: vm-networking-lab
+spec:
+  podSelector:
+    matchLabels:
+      kubevirt.io/vm: basic-vm
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          kubevirt.io/vm: multihomed-vm
+    ports:
+    - protocol: TCP
+      port: 22
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443

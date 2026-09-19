@@ -1,0 +1,623 @@
+Lab 7: Network Configuration for Virtual Machines
+Objectives
+By the end of this lab, you will be able to:
+
+Configure default networking for Virtual Machines using Kubernetes Software Defined Networking (SDN)
+Set up Multus CNI to enable multi-homed networking for VMs
+Create and manage Network Attachment Definitions (NADs)
+Verify network connectivity between VMs and cluster services
+Troubleshoot common VM networking issues in OpenShift Virtualization
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes networking concepts
+Familiarity with OpenShift Virtualization fundamentals
+Knowledge of YAML configuration files
+Understanding of Linux networking commands
+Completed previous labs in the OpenShift Virtualization series
+Required Knowledge Areas
+Kubernetes Networking: Understanding of pods, services, and cluster networking
+CNI Concepts: Basic knowledge of Container Network Interface
+Linux Networking: Familiarity with network interfaces and routing
+YAML Syntax: Ability to read and modify YAML configuration files
+Lab Environment Setup
+Good News! Al Nafi provides ready-to-use Linux-based cloud machines for this lab. Simply click Start Lab and you'll have access to a pre-configured OpenShift cluster with OpenShift Virtualization already installed. No need to build your own virtual machines or configure the base environment.
+
+What's Pre-Configured
+OpenShift 4.12+ cluster with 3 worker nodes
+OpenShift Virtualization operator installed
+kubectl and oc CLI tools configured
+Sample VM templates available
+Network tools pre-installed
+Task 1: Set up Kubernetes SDN for Default VM Networking
+Subtask 1.1: Understand Default Pod Network
+First, let's examine the default networking configuration that VMs will use.
+
+Step 1: Check the current cluster network configuration
+
+oc get network.config cluster -o yaml
+Step 2: Examine the default CNI configuration
+
+oc get network.operator cluster -o yaml
+Step 3: View available network policies
+
+oc get networkpolicies --all-namespaces
+Subtask 1.2: Create a Basic VM with Default Networking
+Step 1: Create a new project for our networking lab
+
+oc new-project vm-networking-lab
+Step 2: Create a basic VM configuration file
+
+cat > basic-vm.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: basic-vm
+  namespace: vm-networking-lab
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: basic-vm
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_pwauth: True
+EOF
+Step 3: Apply the VM configuration
+
+oc apply -f basic-vm.yaml
+Step 4: Wait for the VM to start and check its status
+
+oc get vm basic-vm
+oc get vmi basic-vm
+Subtask 1.3: Examine VM Network Configuration
+Step 1: Get the VM's pod information
+
+oc get pods -l kubevirt.io/vm=basic-vm
+Step 2: Check the VM's network interface
+
+VM_POD=$(oc get pods -l kubevirt.io/vm=basic-vm -o jsonpath='{.items[0].metadata.name}')
+oc exec $VM_POD -- ip addr show
+Step 3: Verify the VM's IP address
+
+oc get vmi basic-vm -o jsonpath='{.status.interfaces[0].ipAddress}'
+Task 2: Configure Multus CNI for Multi-homed VMs
+Subtask 2.1: Verify Multus Installation
+Step 1: Check if Multus is available in the cluster
+
+oc get pods -n openshift-multus
+Step 2: Verify Multus configuration
+
+oc get network-attachment-definitions --all-namespaces
+Subtask 2.2: Create Network Attachment Definitions
+Step 1: Create a bridge Network Attachment Definition
+
+cat > bridge-nad.yaml << 'EOF'
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: bridge-network
+  namespace: vm-networking-lab
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "bridge-network",
+      "type": "bridge",
+      "bridge": "br1",
+      "ipam": {
+        "type": "static"
+      }
+    }
+EOF
+Step 2: Apply the bridge NAD
+
+oc apply -f bridge-nad.yaml
+Step 3: Create a macvlan Network Attachment Definition
+
+cat > macvlan-nad.yaml << 'EOF'
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: macvlan-network
+  namespace: vm-networking-lab
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "macvlan-network",
+      "type": "macvlan",
+      "master": "eth0",
+      "mode": "bridge",
+      "ipam": {
+        "type": "static"
+      }
+    }
+EOF
+Step 4: Apply the macvlan NAD
+
+oc apply -f macvlan-nad.yaml
+Step 5: Verify the NADs were created
+
+oc get network-attachment-definitions -n vm-networking-lab
+Subtask 2.3: Create a Multi-homed VM
+Step 1: Create a VM with multiple network interfaces
+
+cat > multihomed-vm.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: multihomed-vm
+  namespace: vm-networking-lab
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: multihomed-vm
+      annotations:
+        k8s.v1.cni.cncf.io/networks: bridge-network,macvlan-network
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: bridge-net
+            bridge: {}
+          - name: macvlan-net
+            bridge: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      - name: bridge-net
+        multus:
+          networkName: bridge-network
+      - name: macvlan-net
+        multus:
+          networkName: macvlan-network
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_pwauth: True
+EOF
+Step 2: Apply the multi-homed VM configuration
+
+oc apply -f multihomed-vm.yaml
+Step 3: Wait for the VM to start
+
+oc get vm multihomed-vm
+oc get vmi multihomed-vm
+Subtask 2.4: Configure Static IP Addresses
+Step 1: Create a NAD with static IP configuration
+
+cat > static-ip-nad.yaml << 'EOF'
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: static-ip-network
+  namespace: vm-networking-lab
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "static-ip-network",
+      "type": "bridge",
+      "bridge": "br2",
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          {
+            "address": "192.168.100.10/24"
+          }
+        ]
+      }
+    }
+EOF
+Step 2: Apply the static IP NAD
+
+oc apply -f static-ip-nad.yaml
+Step 3: Create a VM with static IP
+
+cat > static-ip-vm.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: static-ip-vm
+  namespace: vm-networking-lab
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: static-ip-vm
+      annotations:
+        k8s.v1.cni.cncf.io/networks: static-ip-network
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: static-net
+            bridge: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      - name: static-net
+        multus:
+          networkName: static-ip-network
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_pwauth: True
+            write_files:
+            - path: /etc/sysconfig/network-scripts/ifcfg-eth1
+              content: |
+                DEVICE=eth1
+                BOOTPROTO=static
+                IPADDR=192.168.100.10
+                NETMASK=255.255.255.0
+                ONBOOT=yes
+            runcmd:
+            - ifup eth1
+EOF
+Step 4: Apply the static IP VM
+
+oc apply -f static-ip-vm.yaml
+Task 3: Verify Network Connectivity Between VMs and Services
+Subtask 3.1: Test VM-to-VM Connectivity
+Step 1: Get IP addresses of all VMs
+
+echo "Basic VM IP:"
+oc get vmi basic-vm -o jsonpath='{.status.interfaces[0].ipAddress}'
+echo
+
+echo "Multihomed VM IPs:"
+oc get vmi multihomed-vm -o jsonpath='{.status.interfaces[*].ipAddress}'
+echo
+
+echo "Static IP VM IPs:"
+oc get vmi static-ip-vm -o jsonpath='{.status.interfaces[*].ipAddress}'
+echo
+Step 2: Test connectivity from basic VM to other VMs
+
+# Get the basic VM's pod name
+BASIC_VM_POD=$(oc get pods -l kubevirt.io/vm=basic-vm -o jsonpath='{.items[0].metadata.name}')
+
+# Get target IP addresses
+MULTIHOMED_IP=$(oc get vmi multihomed-vm -o jsonpath='{.status.interfaces[0].ipAddress}')
+STATIC_IP=$(oc get vmi static-ip-vm -o jsonpath='{.status.interfaces[0].ipAddress}')
+
+# Test ping connectivity
+echo "Testing connectivity from basic-vm to multihomed-vm:"
+oc exec $BASIC_VM_POD -- ping -c 3 $MULTIHOMED_IP
+
+echo "Testing connectivity from basic-vm to static-ip-vm:"
+oc exec $BASIC_VM_POD -- ping -c 3 $STATIC_IP
+Subtask 3.2: Create and Test Service Connectivity
+Step 1: Create a service for one of the VMs
+
+cat > vm-service.yaml << 'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: basic-vm-service
+  namespace: vm-networking-lab
+spec:
+  selector:
+    kubevirt.io/vm: basic-vm
+  ports:
+  - port: 22
+    targetPort: 22
+    protocol: TCP
+    name: ssh
+  type: ClusterIP
+EOF
+Step 2: Apply the service
+
+oc apply -f vm-service.yaml
+Step 3: Verify the service was created
+
+oc get svc basic-vm-service
+oc describe svc basic-vm-service
+Step 4: Test service connectivity from another VM
+
+# Get the multihomed VM's pod name
+MULTIHOMED_VM_POD=$(oc get pods -l kubevirt.io/vm=multihomed-vm -o jsonpath='{.items[0].metadata.name}')
+
+# Get service IP
+SERVICE_IP=$(oc get svc basic-vm-service -o jsonpath='{.spec.clusterIP}')
+
+# Test connectivity to the service
+echo "Testing connectivity to service from multihomed-vm:"
+oc exec $MULTIHOMED_VM_POD -- nc -zv $SERVICE_IP 22
+Subtask 3.3: Test External Connectivity
+Step 1: Test internet connectivity from VMs
+
+echo "Testing internet connectivity from basic-vm:"
+oc exec $BASIC_VM_POD -- ping -c 3 8.8.8.8
+
+echo "Testing DNS resolution from basic-vm:"
+oc exec $BASIC_VM_POD -- nslookup google.com
+Step 2: Test connectivity to cluster services
+
+# Test connectivity to Kubernetes API
+echo "Testing connectivity to Kubernetes API:"
+oc exec $BASIC_VM_POD -- nc -zv kubernetes.default.svc.cluster.local 443
+
+# Test connectivity to cluster DNS
+echo "Testing DNS service connectivity:"
+oc exec $BASIC_VM_POD -- nslookup kubernetes.default.svc.cluster.local
+Subtask 3.4: Network Troubleshooting and Verification
+Step 1: Check VM network interfaces inside the VMs
+
+# Access basic VM console (in a separate terminal if needed)
+echo "To access VM console, run:"
+echo "virtctl console basic-vm -n vm-networking-lab"
+
+# Or check interfaces via pod exec
+echo "Network interfaces in basic-vm:"
+oc exec $BASIC_VM_POD -- ip addr show
+
+echo "Network interfaces in multihomed-vm:"
+MULTIHOMED_VM_POD=$(oc get pods -l kubevirt.io/vm=multihomed-vm -o jsonpath='{.items[0].metadata.name}')
+oc exec $MULTIHOMED_VM_POD -- ip addr show
+Step 2: Verify routing tables
+
+echo "Routing table in basic-vm:"
+oc exec $BASIC_VM_POD -- ip route show
+
+echo "Routing table in multihomed-vm:"
+oc exec $MULTIHOMED_VM_POD -- ip route show
+Step 3: Check network statistics
+
+echo "Network statistics for basic-vm:"
+oc exec $BASIC_VM_POD -- cat /proc/net/dev
+
+echo "Network statistics for multihomed-vm:"
+oc exec $MULTIHOMED_VM_POD -- cat /proc/net/dev
+Subtask 3.5: Monitor Network Traffic
+Step 1: Install network monitoring tools (if not already available)
+
+# Create a debug pod with network tools
+cat > network-debug-pod.yaml << 'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: network-debug
+  namespace: vm-networking-lab
+spec:
+  containers:
+  - name: debug
+    image: nicolaka/netshoot
+    command: ["/bin/bash"]
+    args: ["-c", "sleep 3600"]
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN"]
+EOF
+Step 2: Apply the debug pod
+
+oc apply -f network-debug-pod.yaml
+Step 3: Use the debug pod to monitor traffic
+
+# Wait for pod to be ready
+oc wait --for=condition=Ready pod/network-debug
+
+# Monitor network traffic
+echo "Monitoring network interfaces:"
+oc exec network-debug -- ip addr show
+
+# Test connectivity from debug pod
+BASIC_VM_IP=$(oc get vmi basic-vm -o jsonpath='{.status.interfaces[0].ipAddress}')
+echo "Testing connectivity from debug pod to basic-vm:"
+oc exec network-debug -- ping -c 3 $BASIC_VM_IP
+Advanced Network Configuration
+Creating Custom Network Policies
+Step 1: Create a network policy to control VM traffic
+
+cat > vm-network-policy.yaml << 'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vm-network-policy
+  namespace: vm-networking-lab
+spec:
+  podSelector:
+    matchLabels:
+      kubevirt.io/vm: basic-vm
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          kubevirt.io/vm: multihomed-vm
+    ports:
+    - protocol: TCP
+      port: 22
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+EOF
+Step 2: Apply the network policy
+
+oc apply -f vm-network-policy.yaml
+Step 3: Test the network policy
+
+# Test that the policy allows SSH from multihomed-vm to basic-vm
+echo "Testing SSH connectivity (should work):"
+oc exec $MULTIHOMED_VM_POD -- nc -zv $BASIC_VM_IP 22
+
+# Test from debug pod (should be blocked)
+echo "Testing SSH from debug pod (should be blocked):"
+oc exec network-debug -- timeout 5 nc -zv $BASIC_VM_IP 22 || echo "Connection blocked as expected"
+Troubleshooting Common Issues
+Issue 1: VM Cannot Start Due to Network Configuration
+Symptoms: VM stays in "Pending" state with network-related errors
+
+Solution Steps:
+
+# Check VM events
+oc describe vm <vm-name>
+
+# Check VMI events
+oc describe vmi <vm-name>
+
+# Check pod events
+oc describe pod <vm-pod-name>
+
+# Verify NAD exists and is correct
+oc get network-attachment-definitions
+oc describe network-attachment-definition <nad-name>
+Issue 2: VM Has No Network Connectivity
+Symptoms: VM starts but cannot reach other pods or external networks
+
+Solution Steps:
+
+# Check VM network interfaces
+oc exec <vm-pod> -- ip addr show
+
+# Check routing table
+oc exec <vm-pod> -- ip route show
+
+# Check DNS configuration
+oc exec <vm-pod> -- cat /etc/resolv.conf
+
+# Test basic connectivity
+oc exec <vm-pod> -- ping 8.8.8.8
+Issue 3: Multus Network Not Working
+Symptoms: Additional network interfaces not appearing in VM
+
+Solution Steps:
+
+# Verify Multus is running
+oc get pods -n openshift-multus
+
+# Check NAD configuration
+oc get network-attachment-definitions -o yaml
+
+# Verify VM annotations
+oc get vmi <vm-name> -o yaml | grep -A 5 annotations
+
+# Check for CNI errors in logs
+oc logs -n openshift-multus -l app=multus
+Lab Cleanup
+Step 1: Remove all VMs
+
+oc delete vm --all -n vm-networking-lab
+Step 2: Remove services
+
+oc delete svc --all -n vm-networking-lab
+Step 3: Remove network policies
+
+oc delete networkpolicy --all -n vm-networking-lab
+Step 4: Remove NADs
+
+oc delete network-attachment-definitions --all -n vm-networking-lab
+Step 5: Remove debug pod
+
+oc delete pod network-debug -n vm-networking-lab
+Step 6: Remove the project
+
+oc delete project vm-networking-lab
+Conclusion
+Congratulations! You have successfully completed Lab 7: Network Configuration for Virtual Machines. In this comprehensive lab, you have accomplished the following:
+
+Key Achievements
+Kubernetes SDN Configuration: You learned how to configure and use the default Kubernetes Software Defined Networking for VM connectivity, understanding how VMs integrate with the cluster's pod network.
+
+Multus CNI Implementation: You successfully set up Multus CNI to enable multi-homed networking, allowing VMs to connect to multiple networks simultaneously through Network Attachment Definitions.
+
+Network Verification: You verified network connectivity between VMs and cluster services, ensuring proper communication paths and troubleshooting potential issues.
+
+Why This Matters
+Production Readiness: The networking skills you've developed are essential for deploying VMs in production OpenShift environments where complex networking requirements are common.
+
+Multi-Network Support: Understanding Multus CNI enables you to create sophisticated network topologies that can meet enterprise requirements for network segmentation and performance.
+
+Troubleshooting Capabilities: The troubleshooting techniques you've learned will help you diagnose and resolve network issues in real-world deployments.
+
+Next Steps
+With these networking fundamentals mastered, you're now prepared to:
+
+Implement advanced network security policies
+Configure high-performance networking for specialized workloads
+Design complex multi-tenant network architectures
+Integrate VMs with external network infrastructure
+The networking configuration skills you've gained in this lab form the foundation for managing enterprise-grade virtualized workloads in OpenShift environments, making you well-prepared for the Red Hat OpenShift Virtualization certification and real-world implementations.
