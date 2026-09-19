@@ -1,0 +1,44 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: test-vm
+  namespace: vm-lifecycle-lab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - masquerade: {}
+            name: default
+        machine:
+          type: pc-q35-rhel8.4.0
+        resources:
+          requests:
+            memory: 1Gi
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+        name: containerdisk
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+        name: cloudinitdisk

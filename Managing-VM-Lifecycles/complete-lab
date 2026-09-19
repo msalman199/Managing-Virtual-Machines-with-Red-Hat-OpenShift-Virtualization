@@ -1,0 +1,418 @@
+Lab 5: Managing VM Lifecycles
+Objectives
+By the end of this lab, students will be able to:
+
+Execute VM lifecycle operations using oc and virtctl command-line tools
+Manage virtual machines through the OpenShift web console interface
+Configure and implement VM run policies including AlwaysRun and Manual
+Understand the different VM states and transitions in OpenShift Virtualization
+Troubleshoot common VM lifecycle management issues
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of OpenShift concepts and terminology
+Familiarity with command-line interface operations
+Knowledge of YAML configuration files
+Completion of previous OpenShift Virtualization labs or equivalent experience
+Access to an OpenShift cluster with OpenShift Virtualization operator installed
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed and configured. Simply click Start Lab to begin - no need to build your own virtual machine environment.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-configured storage classes
+Sample virtual machine templates
+Command-line tools: oc, virtctl, and kubectl
+Task 1: Managing VM Lifecycles with Command-Line Tools
+Subtask 1.1: Install and Configure virtctl
+First, ensure you have the necessary command-line tools installed and configured.
+
+Verify oc client installation:
+oc version
+Install virtctl if not already available:
+# Download virtctl (replace with current version)
+curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/v0.59.0/virtctl-v0.59.0-linux-amd64
+chmod +x virtctl
+sudo mv virtctl /usr/local/bin/
+Verify virtctl installation:
+virtctl version
+Login to your OpenShift cluster:
+oc login -u <username> -p <password> <cluster-url>
+Subtask 1.2: Create a Sample Virtual Machine
+Before managing VM lifecycles, create a test virtual machine.
+
+Create a new project for VM testing:
+oc new-project vm-lifecycle-lab
+Create a sample VM YAML file:
+cat > sample-vm.yaml << EOF
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: test-vm
+  namespace: vm-lifecycle-lab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - masquerade: {}
+            name: default
+        machine:
+          type: pc-q35-rhel8.4.0
+        resources:
+          requests:
+            memory: 1Gi
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+        name: containerdisk
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+        name: cloudinitdisk
+EOF
+Apply the VM configuration:
+oc apply -f sample-vm.yaml
+Verify VM creation:
+oc get vm -n vm-lifecycle-lab
+Subtask 1.3: Start and Stop VMs using virtctl
+Now practice starting and stopping VMs using the virtctl command.
+
+Start the virtual machine:
+virtctl start test-vm -n vm-lifecycle-lab
+Check VM status:
+oc get vm test-vm -n vm-lifecycle-lab
+oc get vmi test-vm -n vm-lifecycle-lab
+Monitor VM startup process:
+virtctl console test-vm -n vm-lifecycle-lab
+# Press Ctrl+] to exit console
+Stop the virtual machine:
+virtctl stop test-vm -n vm-lifecycle-lab
+Verify VM has stopped:
+oc get vm test-vm -n vm-lifecycle-lab
+oc get vmi test-vm -n vm-lifecycle-lab
+Subtask 1.4: Restart and Pause Operations
+Learn additional lifecycle operations for comprehensive VM management.
+
+Start the VM again:
+virtctl start test-vm -n vm-lifecycle-lab
+Restart the running VM:
+virtctl restart test-vm -n vm-lifecycle-lab
+Pause the virtual machine:
+virtctl pause vmi test-vm -n vm-lifecycle-lab
+Check paused status:
+oc get vmi test-vm -n vm-lifecycle-lab -o yaml | grep phase
+Unpause the virtual machine:
+virtctl unpause vmi test-vm -n vm-lifecycle-lab
+Subtask 1.5: Using oc Commands for VM Management
+Practice using native OpenShift commands for VM lifecycle management.
+
+Start VM using oc patch:
+oc patch vm test-vm -n vm-lifecycle-lab --type merge -p '{"spec":{"running":true}}'
+Stop VM using oc patch:
+oc patch vm test-vm -n vm-lifecycle-lab --type merge -p '{"spec":{"running":false}}'
+Check VM specification:
+oc get vm test-vm -n vm-lifecycle-lab -o yaml | grep running
+Task 2: VM Lifecycle Management via Web Console
+Subtask 2.1: Access OpenShift Web Console
+Navigate to the OpenShift web console for graphical VM management.
+
+Open web browser and navigate to OpenShift console:
+
+URL format: https://<cluster-domain>
+Login with your credentials
+Navigate to Virtualization section:
+
+Click on Workloads in the left navigation
+Select Virtualization
+Choose Virtual Machines
+Select your project:
+
+Ensure vm-lifecycle-lab project is selected from the dropdown
+Subtask 2.2: Start and Stop VMs via Web Console
+Practice VM lifecycle operations through the graphical interface.
+
+Locate your test VM:
+
+Find test-vm in the virtual machines list
+Note the current status (Running/Stopped)
+Start the VM via web console:
+
+Click on the VM name test-vm
+Click the Actions dropdown
+Select Start Virtual Machine
+Observe status change to Starting then Running
+Stop the VM via web console:
+
+With VM selected, click Actions dropdown
+Select Stop Virtual Machine
+Confirm the action in the dialog box
+Watch status change to Stopping then Stopped
+Restart the VM:
+
+Start the VM first if stopped
+Click Actions dropdown
+Select Restart Virtual Machine
+Confirm the restart operation
+Subtask 2.3: Monitor VM Status and Events
+Learn to monitor VM lifecycle events through the web console.
+
+View VM details:
+
+Click on test-vm to open details page
+Explore the Overview, Details, and Events tabs
+Monitor VM events:
+
+Click on Events tab
+Observe lifecycle events like Started, Stopped, Created
+Check VM metrics:
+
+Navigate to Metrics tab
+Review CPU, memory, and network usage graphs
+Task 3: Configure VM Run Policies
+Subtask 3.1: Understanding Run Policies
+Learn about different VM run policies and their applications.
+
+Run Policy Types:
+
+Manual: VM starts/stops only through explicit user actions
+Always: VM automatically restarts if it stops unexpectedly
+RerunOnFailure: VM restarts only if it fails (exit code != 0)
+Halted: VM remains stopped regardless of configuration
+Subtask 3.2: Set AlwaysRun Policy via Command Line
+Configure a VM to automatically restart using the AlwaysRun policy.
+
+Create VM with AlwaysRun policy:
+cat > always-run-vm.yaml << EOF
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: always-run-vm
+  namespace: vm-lifecycle-lab
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: always-run-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - masquerade: {}
+            name: default
+        machine:
+          type: pc-q35-rhel8.4.0
+        resources:
+          requests:
+            memory: 1Gi
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+        name: containerdisk
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+        name: cloudinitdisk
+EOF
+Apply the AlwaysRun VM:
+oc apply -f always-run-vm.yaml
+Verify the VM starts automatically:
+oc get vm always-run-vm -n vm-lifecycle-lab
+oc get vmi always-run-vm -n vm-lifecycle-lab
+Subtask 3.3: Test AlwaysRun Policy Behavior
+Verify that the AlwaysRun policy automatically restarts the VM.
+
+Force stop the VM instance:
+oc delete vmi always-run-vm -n vm-lifecycle-lab
+Watch VM automatically restart:
+watch "oc get vm always-run-vm -n vm-lifecycle-lab && echo '---' && oc get vmi always-run-vm -n vm-lifecycle-lab"
+# Press Ctrl+C to exit watch
+Verify automatic restart occurred:
+oc get events -n vm-lifecycle-lab --field-selector involvedObject.name=always-run-vm
+Subtask 3.4: Modify Run Policies
+Practice changing run policies on existing VMs.
+
+Change existing VM to Manual policy:
+oc patch vm test-vm -n vm-lifecycle-lab --type merge -p '{"spec":{"runStrategy":"Manual","running":null}}'
+Verify policy change:
+oc get vm test-vm -n vm-lifecycle-lab -o yaml | grep -A5 -B5 runStrategy
+Change to RerunOnFailure policy:
+oc patch vm test-vm -n vm-lifecycle-lab --type merge -p '{"spec":{"runStrategy":"RerunOnFailure"}}'
+Subtask 3.5: Configure Run Policies via Web Console
+Learn to set run policies through the graphical interface.
+
+Navigate to VM details in web console:
+
+Go to Virtualization > Virtual Machines
+Click on test-vm
+Edit VM configuration:
+
+Click Actions dropdown
+Select Edit Virtual Machine
+Modify run strategy:
+
+In the YAML editor, locate the spec section
+Change or add runStrategy: Always
+Remove running: false if present
+Click Save
+Verify changes:
+
+Return to VM overview
+Confirm the VM starts automatically
+Check the Details tab for run strategy information
+Task 4: Advanced VM Lifecycle Operations
+Subtask 4.1: VM Migration Operations
+Learn to migrate VMs between nodes for maintenance and load balancing.
+
+Check current VM node placement:
+oc get vmi always-run-vm -n vm-lifecycle-lab -o wide
+Initiate VM migration:
+virtctl migrate always-run-vm -n vm-lifecycle-lab
+Monitor migration progress:
+oc get vmim -n vm-lifecycle-lab
+oc get vmi always-run-vm -n vm-lifecycle-lab -o wide
+Subtask 4.2: VM Snapshot Operations
+Create and manage VM snapshots for backup and recovery.
+
+Create a VM snapshot:
+cat > vm-snapshot.yaml << EOF
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: test-vm-snapshot
+  namespace: vm-lifecycle-lab
+spec:
+  source:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: test-vm
+EOF
+Apply snapshot configuration:
+oc apply -f vm-snapshot.yaml
+Check snapshot status:
+oc get vmsnapshot -n vm-lifecycle-lab
+Troubleshooting Common Issues
+Issue 1: VM Fails to Start
+Symptoms: VM remains in Starting state or shows error status
+
+Solutions:
+
+Check resource availability:
+oc describe vm <vm-name> -n <namespace>
+oc get events -n <namespace>
+Verify node resources:
+oc describe nodes
+Check storage class availability:
+oc get storageclass
+Issue 2: virtctl Commands Not Working
+Symptoms: Command not found or connection errors
+
+Solutions:
+
+Verify virtctl installation:
+which virtctl
+virtctl version
+Check cluster connectivity:
+oc whoami
+oc cluster-info
+Issue 3: Run Policy Not Taking Effect
+Symptoms: VM doesn't restart automatically with Always policy
+
+Solutions:
+
+Verify policy configuration:
+oc get vm <vm-name> -o yaml | grep -A5 -B5 runStrategy
+Check for conflicting settings:
+oc get vm <vm-name> -o yaml | grep running
+Remove conflicting running field:
+oc patch vm <vm-name> --type json -p '[{"op": "remove", "path": "/spec/running"}]'
+Lab Validation
+Validation Checklist
+Verify you have completed all tasks by checking the following:
+
+Command-line operations:
+
+ Successfully started and stopped VMs using virtctl
+ Used oc commands for VM lifecycle management
+ Performed restart and pause operations
+Web console operations:
+
+ Managed VMs through the graphical interface
+ Monitored VM events and status changes
+ Accessed VM details and metrics
+Run policy configuration:
+
+ Created VM with AlwaysRun policy
+ Tested automatic restart behavior
+ Modified run policies on existing VMs
+Advanced operations:
+
+ Performed VM migration
+ Created VM snapshots
+Final Verification Commands
+Run these commands to confirm your lab completion:
+
+# List all VMs in the lab namespace
+oc get vm -n vm-lifecycle-lab
+
+# Check VM run strategies
+oc get vm -n vm-lifecycle-lab -o custom-columns=NAME:.metadata.name,STRATEGY:.spec.runStrategy,RUNNING:.spec.running
+
+# Verify VM instances
+oc get vmi -n vm-lifecycle-lab
+
+# Check recent events
+oc get events -n vm-lifecycle-lab --sort-by='.lastTimestamp'
+Conclusion
+In this lab, you have successfully learned to manage virtual machine lifecycles in OpenShift Virtualization. You accomplished the following key objectives:
+
+What You Learned:
+
+Command-line mastery: Used both virtctl and oc commands to control VM states including start, stop, restart, and pause operations
+Web console proficiency: Managed VMs through the graphical interface, monitoring status changes and events in real-time
+Run policy expertise: Configured and tested different run strategies including Manual, Always, and RerunOnFailure policies
+Advanced operations: Performed VM migrations and created snapshots for backup and recovery scenarios
+Why This Matters: VM lifecycle management is crucial for maintaining efficient virtualized environments. The skills you developed enable you to:
+
+Ensure high availability through proper run policy configuration
+Perform maintenance operations without service disruption
+Automate VM recovery processes
+Monitor and troubleshoot VM operations effectively
+These capabilities are essential for managing production OpenShift Virtualization environments and are directly applicable to real-world scenarios where reliable VM operations are critical for business continuity.
+
+Next Steps: Continue building your OpenShift Virtualization expertise by exploring advanced topics such as VM networking, storage management, and integration with CI/CD pipelines. The foundation you've built in VM lifecycle management will support these more complex operations.

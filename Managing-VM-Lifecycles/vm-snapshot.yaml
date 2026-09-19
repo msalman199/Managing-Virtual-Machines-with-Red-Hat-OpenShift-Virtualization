@@ -1,0 +1,10 @@
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: test-vm-snapshot
+  namespace: vm-lifecycle-lab
+spec:
+  source:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: test-vm
