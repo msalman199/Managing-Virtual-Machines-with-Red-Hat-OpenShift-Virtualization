@@ -1,0 +1,54 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          threads: 2
+          sockets: 1
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: datadisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 1
+          limits:
+            memory: 4Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: datadisk
+        emptyDisk:
+          capacity: 10Gi
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=

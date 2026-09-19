@@ -1,0 +1,513 @@
+Lab Material
+Lab 6: Configuring VM Resources
+Objectives
+By the end of this lab, you will be able to:
+
+Configure VM resource allocation for CPU, memory, and disk using YAML
+Modify VM resources such as CPU, memory, and disks in the VM Custom Resource (CR)
+Apply changes and monitor the resource allocation of virtual machines
+Understand the relationship between VM resource specifications and actual allocation
+Troubleshoot common resource configuration issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes concepts (pods, resources, YAML)
+Familiarity with OpenShift CLI (oc command)
+Knowledge of Linux command line operations
+Completed previous labs in the OpenShift Virtualization series
+Understanding of virtual machine concepts (CPU, memory, storage)
+Lab Environment
+Al Nafi provides Linux-based cloud machines - simply click Start Lab to begin. No need to build your own VM or install additional software. Your lab environment includes:
+
+OpenShift cluster with Virtualization operator installed
+Pre-configured storage classes
+Command-line tools (oc, kubectl, vim)
+Sample VM templates ready for use
+Task 1: Understanding VM Resource Configuration
+Subtask 1.1: Examine Current VM Resources
+First, let's explore the existing VMs and their current resource allocations.
+
+Connect to your lab environment and open a terminal
+
+List all virtual machines in your namespace:
+
+oc get vms
+Examine a specific VM's resource configuration:
+oc get vm sample-vm -o yaml
+Look for the resource specifications in the output. You should see sections like:
+spec:
+  template:
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        memory:
+          guest: 1Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+Subtask 1.2: Create a Base VM for Resource Modification
+If you don't have an existing VM, create one using this configuration:
+
+Create a new VM YAML file:
+cat > base-vm.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        memory:
+          guest: 1Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Apply the VM configuration:
+oc apply -f base-vm.yaml
+Verify the VM was created:
+oc get vm resource-test-vm
+Task 2: Modifying CPU Resources
+Subtask 2.1: Configure CPU Cores
+Let's modify the CPU allocation for our virtual machine.
+
+Create a CPU-modified configuration:
+cat > vm-cpu-config.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          threads: 2
+          sockets: 1
+        memory:
+          guest: 1Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 2
+          limits:
+            memory: 1Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Apply the updated configuration:
+oc apply -f vm-cpu-config.yaml
+Verify the CPU configuration change:
+oc get vm resource-test-vm -o jsonpath='{.spec.template.spec.domain.cpu}'
+Subtask 2.2: Understanding CPU Configuration Options
+The CPU configuration includes several important parameters:
+
+cores: Number of CPU cores per socket
+threads: Number of threads per core
+sockets: Number of CPU sockets
+requests: Minimum CPU resources guaranteed
+limits: Maximum CPU resources allowed
+Task 3: Modifying Memory Resources
+Subtask 3.1: Increase Memory Allocation
+Now let's modify the memory allocation for better performance.
+
+Create a memory-optimized configuration:
+cat > vm-memory-config.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          threads: 2
+          sockets: 1
+        memory:
+          guest: 2Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 2
+          limits:
+            memory: 2Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Apply the memory configuration:
+oc apply -f vm-memory-config.yaml
+Verify the memory allocation:
+oc get vm resource-test-vm -o jsonpath='{.spec.template.spec.domain.memory.guest}'
+Subtask 3.2: Configure Memory Overcommit
+For development environments, you might want to configure memory overcommit:
+
+Create a configuration with memory overcommit:
+cat > vm-overcommit-config.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          threads: 2
+          sockets: 1
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 1
+          limits:
+            memory: 4Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Apply the overcommit configuration:
+oc apply -f vm-overcommit-config.yaml
+Task 4: Configuring Disk Resources
+Subtask 4.1: Add Additional Storage
+Let's add more storage to our virtual machine.
+
+Create a configuration with additional disk:
+cat > vm-storage-config.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          threads: 2
+          sockets: 1
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: datadisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 1
+          limits:
+            memory: 4Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: datadisk
+        emptyDisk:
+          capacity: 10Gi
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Apply the storage configuration:
+oc apply -f vm-storage-config.yaml
+Verify the disk configuration:
+oc get vm resource-test-vm -o jsonpath='{.spec.template.spec.volumes[*].name}'
+Subtask 4.2: Configure Persistent Storage
+For production workloads, use persistent storage:
+
+Create a PVC for persistent storage:
+cat > vm-pvc.yaml << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vm-data-pvc
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+EOF
+Apply the PVC:
+oc apply -f vm-pvc.yaml
+Update VM to use persistent storage:
+cat > vm-persistent-config.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: resource-test-vm
+  labels:
+    app: resource-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: resource-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+          threads: 2
+          sockets: 1
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: rootdisk
+          - disk:
+              bus: virtio
+            name: persistentdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 1
+          limits:
+            memory: 4Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: persistentdisk
+        persistentVolumeClaim:
+          claimName: vm-data-pvc
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Apply the persistent storage configuration:
+oc apply -f vm-persistent-config.yaml
+Task 5: Monitoring Resource Allocation
+Subtask 5.1: Start the VM and Monitor Resources
+Start the virtual machine:
+oc patch vm resource-test-vm --type merge -p '{"spec":{"running":true}}'
+Wait for the VM to start:
+oc get vm resource-test-vm -w
+Press Ctrl+C when the VM shows Running: True.
+
+Check the VMI (Virtual Machine Instance):
+oc get vmi resource-test-vm
+Subtask 5.2: Monitor Resource Usage
+View detailed resource information:
+oc describe vmi resource-test-vm
+Check the underlying pod resources:
+oc get pods -l kubevirt.io/vm=resource-test-vm -o wide
+Monitor resource usage in real-time:
+oc top pods -l kubevirt.io/vm=resource-test-vm
+Subtask 5.3: Verify Resource Allocation
+Check CPU allocation:
+oc get vmi resource-test-vm -o jsonpath='{.spec.domain.cpu}' | jq
+Check memory allocation:
+oc get vmi resource-test-vm -o jsonpath='{.spec.domain.memory}' | jq
+List all disks:
+oc get vmi resource-test-vm -o jsonpath='{.spec.volumes[*].name}'
+Task 6: Dynamic Resource Modification
+Subtask 6.1: Hot-plug Memory (if supported)
+Some resource changes can be made while the VM is running:
+
+Check if hot-plug is supported:
+oc get vmi resource-test-vm -o jsonpath='{.status.conditions[?(@.type=="LiveMigratable")].status}'
+Attempt to increase memory (this may require stopping the VM):
+oc patch vm resource-test-vm --type merge -p '{"spec":{"template":{"spec":{"domain":{"memory":{"guest":"6Gi"}}}}}}'
+Subtask 6.2: Restart VM with New Configuration
+Stop the VM:
+oc patch vm resource-test-vm --type merge -p '{"spec":{"running":false}}'
+Wait for VM to stop:
+oc get vm resource-test-vm -w
+Start the VM with new configuration:
+oc patch vm resource-test-vm --type merge -p '{"spec":{"running":true}}'
+Verify the new resource allocation:
+oc get vmi resource-test-vm -o jsonpath='{.spec.domain.memory.guest}'
+Troubleshooting Common Issues
+Issue 1: Insufficient Resources
+If your VM fails to start due to insufficient resources:
+
+Check node resources:
+oc describe nodes
+Reduce resource requests:
+oc patch vm resource-test-vm --type merge -p '{"spec":{"template":{"spec":{"domain":{"resources":{"requests":{"memory":"512Mi","cpu":"500m"}}}}}}}'
+Issue 2: Storage Issues
+If storage-related problems occur:
+
+Check PVC status:
+oc get pvc vm-data-pvc
+Verify storage class:
+oc get storageclass
+Check available storage:
+oc get pv
+Issue 3: Configuration Validation Errors
+If YAML validation fails:
+
+Validate YAML syntax:
+oc apply -f vm-config.yaml --dry-run=client
+Check resource quotas:
+oc describe quota
+Cleanup
+After completing the lab, clean up the resources:
+
+Stop and delete the VM:
+oc delete vm resource-test-vm
+Delete the PVC:
+oc delete pvc vm-data-pvc
+Remove configuration files:
+rm -f *.yaml
+Conclusion
+In this lab, you have successfully learned how to configure VM resources in OpenShift Virtualization. You accomplished the following key tasks:
+
+Configured CPU resources including cores, threads, and sockets
+Modified memory allocation with both basic and overcommit scenarios
+Added storage resources using both ephemeral and persistent volumes
+Applied resource changes using YAML configurations
+Monitored resource allocation and verified configurations
+Troubleshot common issues related to resource configuration
+These skills are essential for managing virtual machines in production environments, allowing you to optimize performance, ensure resource availability, and maintain efficient resource utilization. Understanding how to properly configure VM resources helps ensure your virtual workloads run smoothly while making the best use of your cluster's available resources.
+
+The ability to modify VM resources dynamically and monitor their allocation is crucial for maintaining high-performance virtualized environments in OpenShift, making you better prepared for real-world scenarios and certification requirements.
