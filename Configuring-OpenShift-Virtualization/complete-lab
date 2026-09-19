@@ -1,0 +1,261 @@
+Lab 2: Configuring OpenShift Virtualization
+Objectives
+By the end of this lab, you will be able to:
+
+Verify the installation and status of KubeVirt components including API server and controllers
+Configure operator permissions and Security Context Constraints (SCCs) for OpenShift Virtualization
+Validate proper installation and permissions for OpenShift Virtualization components
+Understand the architecture and components of OpenShift Virtualization
+Troubleshoot common configuration issues with OpenShift Virtualization
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of OpenShift/Kubernetes concepts (pods, services, operators)
+Familiarity with command-line interface (CLI) operations
+Knowledge of YAML configuration files
+Understanding of Linux permissions and security contexts
+Completed Lab 1: Installing OpenShift Virtualization or have OpenShift Virtualization already installed
+Access to an OpenShift cluster with cluster-admin privileges
+Lab Environment
+Al Nafi provides ready-to-use Linux-based cloud machines for this lab. Simply click Start Lab to access your pre-configured environment. No need to build your own virtual machine or set up additional infrastructure.
+
+Your lab environment includes:
+
+OpenShift cluster with OpenShift Virtualization installed
+Command-line tools (oc, kubectl)
+Administrative access to the cluster
+Task 1: Verify KubeVirt Components
+Subtask 1.1: Check OpenShift Virtualization Operator Status
+First, let's verify that the OpenShift Virtualization operator is properly installed and running.
+
+Login to your OpenShift cluster using the provided credentials:
+oc login --token=<your-token> --server=<your-server-url>
+Check the OpenShift Virtualization operator status:
+oc get csv -n openshift-cnv
+Expected output should show the ClusterServiceVersion (CSV) in Succeeded phase:
+
+NAME                                      DISPLAY                    VERSION   REPLACES   PHASE
+kubevirt-hyperconverged-operator.v4.14   OpenShift Virtualization   4.14.0               Succeeded
+Verify the operator deployment:
+oc get deployment -n openshift-cnv
+You should see deployments like:
+
+hco-operator
+hyperconverged-cluster-cli-download
+virt-template-validator
+Subtask 1.2: Examine KubeVirt Core Components
+Check the HyperConverged custom resource:
+oc get hyperconverged -n openshift-cnv
+Get detailed information about the HyperConverged resource:
+oc describe hyperconverged kubevirt-hyperconverged -n openshift-cnv
+Look for the Status section to ensure all components are available.
+
+Verify KubeVirt deployment:
+oc get kubevirt -n openshift-cnv
+Expected output:
+
+NAME       AGE   PHASE
+kubevirt   10m   Deployed
+Subtask 1.3: Check KubeVirt API Server and Controllers
+Verify the virt-api deployment (KubeVirt API server):
+oc get deployment virt-api -n openshift-cnv
+Check virt-api pods are running:
+oc get pods -n openshift-cnv -l kubevirt.io=virt-api
+Verify the virt-controller deployment:
+oc get deployment virt-controller -n openshift-cnv
+Check virt-controller pods:
+oc get pods -n openshift-cnv -l kubevirt.io=virt-controller
+Verify virt-handler daemonset (runs on each node):
+oc get daemonset virt-handler -n openshift-cnv
+Check virt-handler pods on all nodes:
+oc get pods -n openshift-cnv -l kubevirt.io=virt-handler
+Subtask 1.4: Validate Component Health
+Check the logs of virt-api to ensure it's healthy:
+oc logs deployment/virt-api -n openshift-cnv --tail=20
+Check virt-controller logs:
+oc logs deployment/virt-controller -n openshift-cnv --tail=20
+Verify all pods are in Running state:
+oc get pods -n openshift-cnv | grep -v Completed
+Task 2: Configure Operator Permissions and SCCs
+Subtask 2.1: Understand Security Context Constraints
+Security Context Constraints (SCCs) control the security context under which pods run in OpenShift.
+
+List all SCCs in the cluster:
+oc get scc
+Examine the kubevirt-controller SCC:
+oc describe scc kubevirt-controller
+Check the privileged SCC (used by some KubeVirt components):
+oc describe scc privileged
+Subtask 2.2: Verify Service Account Permissions
+List service accounts in the openshift-cnv namespace:
+oc get serviceaccounts -n openshift-cnv
+Check the kubevirt-controller service account:
+oc describe serviceaccount kubevirt-controller -n openshift-cnv
+Verify SCC assignments for kubevirt-controller:
+oc describe scc kubevirt-controller | grep Users
+Subtask 2.3: Configure Additional Permissions (if needed)
+Create a custom service account for VM management (optional):
+oc create serviceaccount vm-manager -n openshift-cnv
+Grant necessary permissions to the service account:
+oc adm policy add-scc-to-user kubevirt-controller -z vm-manager -n openshift-cnv
+Verify the permission assignment:
+oc describe scc kubevirt-controller | grep "system:serviceaccount:openshift-cnv:vm-manager"
+Subtask 2.4: Configure Node-Level Permissions
+Check if nodes have the required labels for virtualization:
+oc get nodes -l cpumanager=true
+Verify that virt-handler has proper node access:
+oc get pods -n openshift-cnv -l kubevirt.io=virt-handler -o wide
+Check cluster role bindings for KubeVirt:
+oc get clusterrolebinding | grep kubevirt
+Task 3: Validate Proper Installation and Permissions
+Subtask 3.1: Test API Connectivity
+Test KubeVirt API accessibility:
+oc api-resources | grep kubevirt
+Expected output should include resources like:
+
+virtualmachines
+virtualmachineinstances
+virtualmachineinstancereplicasets
+Test creating a simple VirtualMachine resource (dry-run):
+cat << EOF | oc apply --dry-run=client -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: test-vm
+  namespace: openshift-cnv
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+        machine:
+          type: pc-q35-rhel8.4.0
+        resources:
+          requests:
+            memory: 1Gi
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+        name: containerdisk
+EOF
+Subtask 3.2: Validate Component Communication
+Check if virt-api can communicate with the Kubernetes API:
+oc logs deployment/virt-api -n openshift-cnv | grep -i "successfully\|ready\|started" | tail -5
+Verify virt-controller is processing events:
+oc logs deployment/virt-controller -n openshift-cnv | grep -i "controller\|started" | tail -5
+Test webhook configurations:
+oc get validatingwebhookconfigurations | grep virt
+oc get mutatingwebhookconfigurations | grep virt
+Subtask 3.3: Perform End-to-End Validation
+Create a test namespace for validation:
+oc create namespace kubevirt-test
+Create a simple test VM:
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: validation-vm
+  namespace: kubevirt-test
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: validation-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+        machine:
+          type: pc-q35-rhel8.4.0
+        resources:
+          requests:
+            memory: 512Mi
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+        name: containerdisk
+EOF
+Verify the VM was created successfully:
+oc get vm validation-vm -n kubevirt-test
+Start the VM to test full functionality:
+oc patch vm validation-vm -n kubevirt-test --type merge -p '{"spec":{"running":true}}'
+Check if the VM instance is created:
+oc get vmi validation-vm -n kubevirt-test
+Monitor the VM startup process:
+oc describe vmi validation-vm -n kubevirt-test
+Subtask 3.4: Clean Up Test Resources
+Stop and delete the test VM:
+oc patch vm validation-vm -n kubevirt-test --type merge -p '{"spec":{"running":false}}'
+oc delete vm validation-vm -n kubevirt-test
+Delete the test namespace:
+oc delete namespace kubevirt-test
+Troubleshooting Common Issues
+Issue 1: Pods Stuck in Pending State
+If KubeVirt pods are stuck in pending state:
+
+oc describe pod <pod-name> -n openshift-cnv
+Check for:
+
+Node selector constraints
+Resource limitations
+SCC violations
+Issue 2: Permission Denied Errors
+If you encounter permission errors:
+
+oc auth can-i create virtualmachines --as=system:serviceaccount:openshift-cnv:kubevirt-controller
+Verify service account permissions and SCC assignments.
+
+Issue 3: API Server Not Responding
+If virt-api is not responding:
+
+oc get events -n openshift-cnv --sort-by='.lastTimestamp'
+Check for certificate issues or network connectivity problems.
+
+Verification Commands Summary
+Use these commands to quickly verify your configuration:
+
+# Check overall operator status
+oc get csv -n openshift-cnv
+
+# Verify all components are running
+oc get pods -n openshift-cnv
+
+# Test API functionality
+oc api-resources | grep kubevirt
+
+# Check SCC assignments
+oc describe scc kubevirt-controller
+
+# Verify node readiness
+oc get nodes -l node-role.kubernetes.io/worker
+Conclusion
+In this lab, you have successfully:
+
+Verified KubeVirt components including the API server, controllers, and handlers
+Configured and validated operator permissions and Security Context Constraints
+Tested the complete installation through end-to-end validation
+Learned troubleshooting techniques for common configuration issues
+This configuration is essential for running virtual machines on OpenShift. The KubeVirt components you verified work together to provide virtualization capabilities:
+
+virt-api serves the KubeVirt API and handles VM lifecycle requests
+virt-controller manages VM resources and ensures desired state
+virt-handler runs on each node and manages VM instances locally
+The proper configuration of permissions and SCCs ensures that these components can operate securely while having the necessary privileges to manage virtual machines. This foundation enables you to create, manage, and operate virtual machines alongside containerized applications in your OpenShift environment.
+
+Understanding these components and their configuration is crucial for the Managing Virtual Machines with Red Hat OpenShift Virtualization certification and for successfully operating virtualized workloads in production environments.
