@@ -1,0 +1,301 @@
+Lab 3: Provisioning Virtual Machines
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the fundamentals of OpenShift Virtualization and Virtual Machine Custom Resources
+Create a VirtualMachine Custom Resource using YAML configuration
+Deploy virtual machines in an OpenShift cluster using the oc command-line interface
+Verify and monitor VM status and lifecycle using OpenShift CLI tools
+Troubleshoot common issues during VM provisioning
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes concepts (pods, namespaces, custom resources)
+Familiarity with YAML syntax and structure
+Basic knowledge of Linux command-line operations
+Understanding of virtualization concepts
+Access to an OpenShift cluster with OpenShift Virtualization operator installed
+Required Knowledge Level: Intermediate understanding of container orchestration and virtualization
+
+Lab Environment Setup
+Good News: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machine or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator pre-installed
+Pre-configured oc CLI tool
+Sample YAML templates and configurations
+All necessary permissions and access rights
+Task 1: Create a VirtualMachine Custom Resource using YAML
+Subtask 1.1: Understanding VirtualMachine Custom Resources
+A VirtualMachine (VM) Custom Resource is a Kubernetes object that defines the desired state of a virtual machine in OpenShift Virtualization. It contains specifications for:
+
+Virtual hardware configuration (CPU, memory, storage)
+Operating system and boot configuration
+Network settings and interfaces
+Lifecycle management policies
+Subtask 1.2: Create the VM YAML Configuration
+First, let's create a directory for our lab files and navigate to it:
+
+mkdir ~/vm-lab
+cd ~/vm-lab
+Now, create a YAML file for our virtual machine configuration:
+
+cat > fedora-vm.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora-vm
+  namespace: default
+  labels:
+    app: fedora-vm
+    os.template.kubevirt.io/fedora38: "true"
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: fedora-vm
+        kubevirt.io/size: small
+    spec:
+      domain:
+        cpu:
+          cores: 1
+          sockets: 1
+          threads: 1
+        memory:
+          guest: 2Gi
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        machine:
+          type: pc-q35-rhel8.6.0
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo:latest
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            user: fedora
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_authorized_keys:
+              - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... # Add your SSH key here
+EOF
+Subtask 1.3: Understanding the YAML Configuration
+Let's break down the key components of our VM configuration:
+
+Metadata Section:
+
+name: Unique identifier for the VM
+namespace: Kubernetes namespace where the VM will be created
+labels: Key-value pairs for organization and selection
+Spec Section:
+
+running: Controls whether the VM should be started immediately
+template: Defines the VM's hardware and software configuration
+Domain Configuration:
+
+cpu: Virtual CPU allocation (cores, sockets, threads)
+memory: RAM allocation for the guest OS
+devices: Virtual hardware devices (disks, network interfaces)
+Storage Configuration:
+
+containerdisk: Pre-built disk image with Fedora OS
+cloudinitdisk: Configuration disk for initial VM setup
+Task 2: Apply the YAML to Create the Virtual Machine
+Subtask 2.1: Verify Cluster Connection
+Before creating the VM, let's verify our connection to the OpenShift cluster:
+
+oc whoami
+oc cluster-info
+Expected output should show your username and cluster information.
+
+Subtask 2.2: Check OpenShift Virtualization Status
+Verify that OpenShift Virtualization is properly installed and running:
+
+oc get csv -n openshift-cnv | grep kubevirt
+oc get pods -n openshift-cnv
+You should see the KubeVirt operator and related pods in a Running state.
+
+Subtask 2.3: Apply the VM Configuration
+Now, let's create the virtual machine using our YAML configuration:
+
+oc apply -f fedora-vm.yaml
+Expected output:
+
+virtualmachine.kubevirt.io/fedora-vm created
+Subtask 2.4: Verify VM Creation
+Check that the VirtualMachine resource was created successfully:
+
+oc get vm
+Expected output:
+
+NAME        AGE   STATUS    READY
+fedora-vm   30s   Stopped   False
+The VM is created but not yet running (Status: Stopped).
+
+Task 3: Verify VM Status Using oc CLI
+Subtask 3.1: Check Detailed VM Information
+Get comprehensive information about your virtual machine:
+
+oc describe vm fedora-vm
+This command provides detailed information including:
+
+VM specifications
+Current status and conditions
+Events and lifecycle information
+Resource allocation details
+Subtask 3.2: Start the Virtual Machine
+Since we set running: false in our YAML, let's start the VM:
+
+oc patch vm fedora-vm --type merge -p '{"spec":{"running":true}}'
+Alternative method using virtctl (if available):
+
+virtctl start fedora-vm
+Subtask 3.3: Monitor VM Startup Process
+Watch the VM as it starts up:
+
+oc get vm fedora-vm -w
+You should see the status change from Stopped to Starting to Running.
+
+Press Ctrl+C to stop watching when the VM reaches Running state.
+
+Subtask 3.4: Check VirtualMachineInstance (VMI)
+When a VM is running, OpenShift creates a VirtualMachineInstance:
+
+oc get vmi
+Expected output:
+
+NAME        AGE   PHASE     IP           NODENAME
+fedora-vm   2m    Running   10.244.0.15  worker-node-1
+Subtask 3.5: Get Detailed VMI Information
+oc describe vmi fedora-vm
+This shows runtime information including:
+
+Assigned IP address
+Node placement
+Resource usage
+Network configuration
+Subtask 3.6: Check Associated Pods
+Every running VM has an associated pod (virt-launcher):
+
+oc get pods -l kubevirt.io/domain=fedora-vm
+Expected output:
+
+NAME                      READY   STATUS    RESTARTS   AGE
+virt-launcher-fedora-vm-xxx   1/1     Running   0          3m
+Subtask 3.7: Monitor VM Logs
+Check the VM's console logs:
+
+oc logs -l kubevirt.io/domain=fedora-vm
+Subtask 3.8: Access VM Console (Optional)
+If virtctl is available, you can access the VM console:
+
+virtctl console fedora-vm
+To exit the console, press Ctrl+].
+
+Advanced Verification and Management
+Check VM Resource Usage
+Monitor resource consumption:
+
+oc top pod -l kubevirt.io/domain=fedora-vm
+View VM Events
+Check recent events related to your VM:
+
+oc get events --field-selector involvedObject.name=fedora-vm
+Stop the Virtual Machine
+When you're done testing, stop the VM:
+
+oc patch vm fedora-vm --type merge -p '{"spec":{"running":false}}'
+Or using virtctl:
+
+virtctl stop fedora-vm
+Troubleshooting Common Issues
+Issue 1: VM Fails to Start
+Symptoms: VM remains in Starting state or shows error conditions.
+
+Solution Steps:
+
+Check VM events: oc describe vm fedora-vm
+Verify node resources: oc describe nodes
+Check storage availability: oc get pv,pvc
+Review operator logs: oc logs -n openshift-cnv -l name=virt-operator
+Issue 2: Image Pull Errors
+Symptoms: Container disk image cannot be pulled.
+
+Solution Steps:
+
+Verify image URL in YAML configuration
+Check network connectivity: oc get pods -o wide
+Verify image registry access: oc get secrets
+Issue 3: Insufficient Resources
+Symptoms: VM scheduling fails due to resource constraints.
+
+Solution Steps:
+
+Check node capacity: oc describe nodes
+Reduce VM resource requests in YAML
+Scale cluster if necessary
+Issue 4: Network Connectivity Problems
+Symptoms: VM starts but has no network access.
+
+Solution Steps:
+
+Verify network configuration: oc describe vmi fedora-vm
+Check pod network: oc get pods -o wide
+Review CNI plugin status: oc get pods -n openshift-sdn
+Lab Cleanup
+When you're finished with the lab, clean up the resources:
+
+# Stop the VM if running
+oc patch vm fedora-vm --type merge -p '{"spec":{"running":false}}'
+
+# Wait for VM to stop
+oc get vm fedora-vm -w
+
+# Delete the VM
+oc delete vm fedora-vm
+
+# Verify cleanup
+oc get vm,vmi,pods -l kubevirt.io/domain=fedora-vm
+Conclusion
+Congratulations! You have successfully completed Lab 3: Provisioning Virtual Machines. In this lab, you accomplished the following:
+
+Key Achievements:
+
+Created a comprehensive VirtualMachine Custom Resource using YAML configuration
+Successfully deployed a Fedora Linux virtual machine in OpenShift
+Mastered the use of oc CLI commands for VM lifecycle management
+Learned to monitor and verify VM status using various OpenShift tools
+Gained hands-on experience with OpenShift Virtualization concepts
+Why This Matters: Virtual machine provisioning in OpenShift Virtualization bridges the gap between traditional virtualization and modern container orchestration. This skill is essential for:
+
+Hybrid Cloud Strategies: Running legacy applications alongside containerized workloads
+Migration Scenarios: Moving traditional VMs to Kubernetes-based platforms
+Development Environments: Providing consistent, reproducible development environments
+Enterprise Integration: Supporting diverse application architectures in a unified platform
+Next Steps:
+
+Explore advanced VM configurations (custom storage, networking)
+Learn about VM templates and automation
+Practice VM migration and backup strategies
+Investigate integration with CI/CD pipelines
+You now have the foundational skills to provision and manage virtual machines in OpenShift Virtualization environments, a critical capability for modern infrastructure management and the Managing Virtual Machines with Red Hat OpenShift Virtualization certification path.
