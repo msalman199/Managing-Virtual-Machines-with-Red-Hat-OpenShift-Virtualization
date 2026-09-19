@@ -1,0 +1,278 @@
+Lab 4: Accessing VM Consoles
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the different methods for accessing virtual machine consoles in OpenShift Virtualization
+Expose VM console access through the OpenShift web console interface
+Configure and access VM consoles using VNC protocol
+Establish remote desktop connections to virtual machines
+Troubleshoot common console connectivity issues
+Implement security best practices for VM console access
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of OpenShift concepts and navigation
+Familiarity with virtual machine fundamentals
+Knowledge of Linux command-line operations
+Understanding of networking protocols (VNC, RDP)
+Completion of previous OpenShift Virtualization labs (Labs 1-3)
+Access to an OpenShift cluster with OpenShift Virtualization operator installed
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed and configured. Simply click Start Lab to begin - no need to build your own virtual machines or configure the environment from scratch.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-deployed virtual machines for testing
+VNC client tools pre-installed
+Remote desktop client applications
+All necessary networking configurations
+Task 1: Expose VM Console Through OpenShift Web Console
+Subtask 1.1: Access the OpenShift Web Console
+Open your web browser and navigate to the OpenShift web console
+Log in using your provided credentials
+Navigate to the Virtualization section in the left sidebar
+Click on VirtualMachines to view available VMs
+Subtask 1.2: Locate Your Virtual Machine
+In the VirtualMachines list, locate the VM named lab-vm-console
+Click on the VM name to open its details page
+Verify the VM status shows as Running
+If the VM is not running, click the Actions dropdown and select Start
+Subtask 1.3: Access Console Settings
+In the VM details page, click on the Console tab
+Observe the different console access options available:
+VNC Console - Graphical console access
+Serial Console - Text-based console access
+Note the console connection status indicator
+Subtask 1.4: Configure Console Access
+Click on the YAML tab to view the VM configuration
+Locate the console configuration section:
+spec:
+  template:
+    spec:
+      domain:
+        devices:
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: console
+            bridge: {}
+Verify that console access is properly configured in the VM specification
+Task 2: Access Console via VNC
+Subtask 2.1: Enable VNC Console Access
+Return to the Console tab in your VM details
+Select VNC Console from the console type dropdown
+Wait for the console to initialize and display the VM desktop
+Subtask 2.2: Test VNC Console Functionality
+Once the VNC console loads, you should see the VM's graphical interface
+Test mouse and keyboard interaction within the console
+Try opening a terminal application within the VM:
+Right-click on the desktop
+Select Open Terminal or Terminal Emulator
+Subtask 2.3: Configure VNC Console Settings
+Click on the Settings icon in the console toolbar
+Adjust the following settings:
+Scale Mode: Set to Fit to Window
+Keyboard Layout: Select your preferred layout
+Mouse Mode: Choose Relative or Absolute based on preference
+Subtask 2.4: Use CLI to Access VNC Console
+Open a terminal on your lab machine
+Install the VNC viewer if not already available:
+# For RHEL/CentOS/Fedora
+sudo dnf install tigervnc
+
+# For Ubuntu/Debian
+sudo apt-get install tigervnc-viewer
+Get the VNC connection details using the OpenShift CLI:
+# Login to OpenShift CLI
+oc login --server=https://your-openshift-cluster --token=your-token
+
+# Get VM console information
+oc get vm lab-vm-console -o yaml | grep -A 10 console
+
+# Create a port-forward to access VNC
+oc port-forward svc/virt-vnc-lab-vm-console 5900:5900
+Connect using the VNC viewer:
+vncviewer localhost:5900
+Task 3: Test Connectivity via Remote Desktop
+Subtask 3.1: Prepare VM for Remote Desktop Access
+Access your VM through the VNC console (from Task 2)
+Install and configure RDP server on the VM:
+# Update the system
+sudo dnf update -y
+
+# Install XRDP server
+sudo dnf install xrdp -y
+
+# Enable and start XRDP service
+sudo systemctl enable xrdp
+sudo systemctl start xrdp
+
+# Configure firewall to allow RDP
+sudo firewall-cmd --permanent --add-port=3389/tcp
+sudo firewall-cmd --reload
+Create a user account for RDP access:
+# Create a new user
+sudo useradd -m rdpuser
+sudo passwd rdpuser
+
+# Add user to necessary groups
+sudo usermod -aG wheel rdpuser
+Subtask 3.2: Configure Network Access for RDP
+Return to the OpenShift web console
+Navigate to Networking > Services
+Create a new service to expose RDP port:
+apiVersion: v1
+kind: Service
+metadata:
+  name: lab-vm-rdp-service
+  namespace: default
+spec:
+  selector:
+    vm.kubevirt.io/name: lab-vm-console
+  ports:
+  - name: rdp
+    port: 3389
+    targetPort: 3389
+    protocol: TCP
+  type: ClusterIP
+Apply the service configuration:
+oc apply -f rdp-service.yaml
+Subtask 3.3: Create Port Forward for RDP Access
+Set up port forwarding for RDP access:
+# Forward local port 3389 to the VM's RDP service
+oc port-forward svc/lab-vm-rdp-service 3389:3389
+Keep this terminal session open for the duration of your RDP testing
+Subtask 3.4: Test Remote Desktop Connection
+Open your RDP client application:
+For Linux (using Remmina):
+
+# Install Remmina if not available
+sudo dnf install remmina
+
+# Launch Remmina
+remmina
+For Windows (using built-in RDP client):
+
+Press Windows + R
+Type mstsc and press Enter
+Configure the RDP connection:
+
+Server: localhost:3389
+Username: rdpuser
+Password: [password you set earlier]
+Establish the connection and verify you can access the VM desktop
+
+Subtask 3.5: Test RDP Functionality
+Once connected via RDP, test the following:
+
+Open a web browser within the VM
+Create and edit a text file
+Test copy/paste functionality between your local machine and the VM
+Verify audio redirection (if applicable)
+Compare the RDP experience with the VNC console access:
+
+Note differences in performance
+Observe feature availability
+Test responsiveness of each method
+Advanced Configuration and Troubleshooting
+Console Security Configuration
+Configure console access with authentication:
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: secure-console-vm
+spec:
+  template:
+    spec:
+      domain:
+        devices:
+          console:
+            auth:
+              secret:
+                secretName: console-auth-secret
+Create the authentication secret:
+# Create secret for console authentication
+oc create secret generic console-auth-secret \
+  --from-literal=username=admin \
+  --from-literal=password=securepassword
+Troubleshooting Common Issues
+Issue 1: VNC Console Not Loading
+
+Check VM status:
+oc get vm lab-vm-console -o wide
+Verify console service is running:
+oc get svc | grep vnc
+Check VM logs:
+oc logs virt-launcher-lab-vm-console-xxxxx
+Issue 2: RDP Connection Refused
+
+Verify XRDP service status within the VM:
+sudo systemctl status xrdp
+Check firewall configuration:
+sudo firewall-cmd --list-ports
+Verify port forwarding is active:
+netstat -tlnp | grep 3389
+Issue 3: Poor Console Performance
+
+Adjust VNC console settings:
+
+Reduce color depth
+Lower screen resolution
+Enable compression
+Check network connectivity:
+
+ping -c 4 [vm-ip-address]
+Verification and Testing
+Console Access Verification Checklist
+VNC Console Access:
+
+ Can access VM through web console VNC
+ Mouse and keyboard input work correctly
+ Can resize and scale console window
+ Console remains stable during use
+RDP Access:
+
+ RDP service is running on the VM
+ Can establish RDP connection from external client
+ Full desktop functionality is available
+ File transfer capabilities work
+Security Verification:
+
+ Console access requires proper authentication
+ Network access is properly restricted
+ Audit logs capture console access events
+Performance Testing
+Test console responsiveness:
+# Run performance test within VM console
+stress-ng --cpu 2 --timeout 30s
+Monitor resource usage during console access:
+# Check VM resource consumption
+oc top pod | grep virt-launcher
+Lab Cleanup
+Remove Created Resources
+Stop port forwarding sessions (Ctrl+C in respective terminals)
+
+Remove the RDP service:
+
+oc delete service lab-vm-rdp-service
+Clean up authentication secrets:
+oc delete secret console-auth-secret
+Stop the test VM if no longer needed:
+oc patch vm lab-vm-console --type merge -p '{"spec":{"running":false}}'
+Conclusion
+In this lab, you have successfully learned how to access virtual machine consoles in OpenShift Virtualization using multiple methods. You have gained hands-on experience with:
+
+VNC Console Access: You learned how to use the built-in web console VNC viewer and external VNC clients to access VM graphical interfaces
+Remote Desktop Protocol: You configured and tested RDP access to virtual machines, providing an alternative method for remote administration
+Security Configuration: You implemented authentication and access controls for console connections
+Troubleshooting Skills: You developed the ability to diagnose and resolve common console connectivity issues
+These skills are essential for managing virtual machines in production environments, as console access is often required for system administration, troubleshooting, and maintenance tasks. The ability to choose between VNC and RDP based on specific requirements allows you to optimize the user experience and performance for different use cases.
+
+Understanding console access methods is particularly important for:
+
+System Administration: Performing maintenance tasks that require direct VM access
+Troubleshooting: Diagnosing issues when network-based access is unavailable
+User Support: Providing remote assistance to users working within virtual machines
+Security Compliance: Implementing proper access controls and audit trails for VM console access
+The knowledge gained in this lab prepares you for real-world scenarios where reliable and secure VM console access is critical for maintaining virtualized infrastructure in OpenShift environments.
