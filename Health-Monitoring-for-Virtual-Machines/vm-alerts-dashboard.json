@@ -1,0 +1,50 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "VM Alerts Dashboard",
+    "tags": ["alerts", "kubevirt"],
+    "panels": [
+      {
+        "id": 1,
+        "title": "Active VM Alerts",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ALERTS{service=\"kubevirt\"}",
+            "format": "table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Alert History",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "increase(prometheus_notifications_total[1h])",
+            "legendFormat": "Notifications Sent"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 3,
+        "title": "VM Health Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=\"kubevirt-vmi\"}",
+            "legendFormat": "{{name}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      }
+    ],
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}

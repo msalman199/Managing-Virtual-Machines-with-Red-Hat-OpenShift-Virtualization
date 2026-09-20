@@ -1,0 +1,616 @@
+Lab 17: Health Monitoring for Virtual Machines
+Objectives
+By the end of this lab, you will be able to:
+
+Set up comprehensive monitoring for virtual machine metrics using Prometheus and Grafana
+Monitor VM resource usage using OpenShift command-line tools
+Configure automated alerts for VM health issues and performance degradation
+Understand the monitoring architecture in OpenShift Virtualization
+Implement proactive monitoring strategies for virtual machine infrastructure
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of OpenShift concepts and navigation
+Familiarity with command-line interface operations
+Knowledge of virtual machine fundamentals
+Understanding of monitoring concepts (metrics, alerts, dashboards)
+Access to an OpenShift cluster with OpenShift Virtualization installed
+Basic knowledge of YAML configuration files
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-installed Prometheus and Grafana monitoring stack
+Sample virtual machines for monitoring practice
+Command-line tools (oc, kubectl)
+Task 1: Set up monitoring for VM metrics using Prometheus and Grafana
+Subtask 1.1: Verify Monitoring Stack Installation
+First, let's verify that the monitoring components are properly installed and running.
+
+Check the monitoring namespace and pods:
+oc get pods -n openshift-monitoring
+Verify Prometheus is running:
+oc get prometheus -n openshift-monitoring
+Check Grafana deployment:
+oc get deployment grafana -n openshift-monitoring
+List available ServiceMonitors:
+oc get servicemonitor -n openshift-monitoring
+Subtask 1.2: Enable VM Metrics Collection
+Create a ServiceMonitor for VM metrics:
+cat << EOF | oc apply -f -
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vm-metrics-monitor
+  namespace: openshift-monitoring
+  labels:
+    app: vm-monitoring
+spec:
+  selector:
+    matchLabels:
+      kubevirt.io: virt-launcher
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+EOF
+Verify the ServiceMonitor was created:
+oc get servicemonitor vm-metrics-monitor -n openshift-monitoring
+Subtask 1.3: Create a Test Virtual Machine for Monitoring
+Create a sample VM with monitoring labels:
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: monitoring-test-vm
+  namespace: default
+  labels:
+    app: test-vm
+    monitoring: enabled
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: monitoring-test-vm
+        app: test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 1
+        memory:
+          guest: 1Gi
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 100m
+          limits:
+            memory: 1Gi
+            cpu: 500m
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+EOF
+Wait for the VM to start:
+oc wait --for=condition=Ready vm/monitoring-test-vm --timeout=300s
+Verify VM is running:
+oc get vm monitoring-test-vm
+oc get vmi monitoring-test-vm
+Subtask 1.4: Access Grafana Dashboard
+Get the Grafana route:
+oc get route grafana -n openshift-monitoring
+Create a port-forward to access Grafana locally:
+oc port-forward -n openshift-monitoring svc/grafana 3000:3000 &
+Get Grafana admin credentials:
+oc get secret grafana-admin-credentials -n openshift-monitoring -o jsonpath='{.data.username}' | base64 -d
+echo
+oc get secret grafana-admin-credentials -n openshift-monitoring -o jsonpath='{.data.password}' | base64 -d
+echo
+Subtask 1.5: Create VM Monitoring Dashboard
+Create a custom dashboard configuration:
+cat << EOF > vm-dashboard.json
+{
+  "dashboard": {
+    "id": null,
+    "title": "Virtual Machine Monitoring",
+    "tags": ["kubevirt", "vm"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "VM CPU Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(kubevirt_vmi_cpu_usage_seconds_total[5m]) * 100",
+            "legendFormat": "{{name}} CPU %"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "CPU Percentage",
+            "max": 100,
+            "min": 0
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "VM Memory Usage",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "kubevirt_vmi_memory_used_bytes / kubevirt_vmi_memory_available_bytes * 100",
+            "legendFormat": "{{name}} Memory %"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Memory Percentage",
+            "max": 100,
+            "min": 0
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}
+EOF
+Import the dashboard using the Grafana API:
+GRAFANA_URL="http://localhost:3000"
+GRAFANA_USER=$(oc get secret grafana-admin-credentials -n openshift-monitoring -o jsonpath='{.data.username}' | base64 -d)
+GRAFANA_PASS=$(oc get secret grafana-admin-credentials -n openshift-monitoring -o jsonpath='{.data.password}' | base64 -d)
+
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -u "$GRAFANA_USER:$GRAFANA_PASS" \
+  -d @vm-dashboard.json \
+  "$GRAFANA_URL/api/dashboards/db"
+Task 2: Use oc adm top to monitor VM resource usage
+Subtask 2.1: Monitor Node Resource Usage
+Check overall node resource consumption:
+oc adm top nodes
+Get detailed node information with labels:
+oc adm top nodes --show-labels
+Monitor nodes continuously:
+watch -n 5 'oc adm top nodes'
+Subtask 2.2: Monitor Pod Resource Usage for VMs
+List all pods with resource usage:
+oc adm top pods --all-namespaces
+Filter VM-related pods:
+oc adm top pods --all-namespaces | grep virt-launcher
+Monitor specific VM pod resources:
+VM_POD=$(oc get pods -l kubevirt.io/vm=monitoring-test-vm -o jsonpath='{.items[0].metadata.name}')
+oc adm top pod $VM_POD
+Get detailed resource information for VM pods:
+oc adm top pods --containers --all-namespaces | grep virt-launcher
+Subtask 2.3: Create Resource Monitoring Script
+Create a comprehensive monitoring script:
+cat << 'EOF' > vm-resource-monitor.sh
+#!/bin/bash
+
+echo "=== Virtual Machine Resource Monitor ==="
+echo "Timestamp: $(date)"
+echo
+
+echo "=== Node Resource Usage ==="
+oc adm top nodes
+echo
+
+echo "=== VM Pod Resource Usage ==="
+oc adm top pods --all-namespaces | grep virt-launcher
+echo
+
+echo "=== VM Status ==="
+oc get vm --all-namespaces
+echo
+
+echo "=== VMI Resource Details ==="
+for vmi in $(oc get vmi --all-namespaces -o jsonpath='{.items[*].metadata.name}'); do
+    namespace=$(oc get vmi $vmi --all-namespaces -o jsonpath='{.items[0].metadata.namespace}')
+    echo "VMI: $vmi (Namespace: $namespace)"
+    oc get vmi $vmi -n $namespace -o jsonpath='{.spec.domain.resources}' | jq .
+    echo
+done
+
+echo "=== Storage Usage ==="
+oc get pvc --all-namespaces | grep -E "(vm-|vmi-)"
+echo
+
+echo "=== Network Usage ==="
+oc get pods --all-namespaces -l kubevirt.io/vm -o wide
+EOF
+
+chmod +x vm-resource-monitor.sh
+Run the monitoring script:
+./vm-resource-monitor.sh
+Set up periodic monitoring:
+# Run every 60 seconds and log to file
+while true; do
+    echo "=== $(date) ===" >> vm-monitor.log
+    ./vm-resource-monitor.sh >> vm-monitor.log
+    sleep 60
+done &
+Subtask 2.4: Analyze Resource Trends
+Create a resource usage analysis script:
+cat << 'EOF' > analyze-vm-resources.sh
+#!/bin/bash
+
+echo "=== VM Resource Analysis ==="
+
+# Get VM resource requests and limits
+echo "VM Resource Requests and Limits:"
+oc get vm --all-namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.template.spec.domain.resources}{"\n"}{end}' | column -t
+
+# Calculate resource utilization
+echo -e "\nCurrent Resource Utilization:"
+for pod in $(oc get pods --all-namespaces -l kubevirt.io/vm -o jsonpath='{.items[*].metadata.name}'); do
+    namespace=$(oc get pod $pod --all-namespaces -o jsonpath='{.items[0].metadata.namespace}')
+    echo "Pod: $pod"
+    oc adm top pod $pod -n $namespace --containers
+    echo
+done
+
+# Check for resource pressure
+echo "Node Resource Pressure:"
+oc describe nodes | grep -A 5 "Conditions:"
+EOF
+
+chmod +x analyze-vm-resources.sh
+./analyze-vm-resources.sh
+Task 3: Configure alerts for VM health issues
+Subtask 3.1: Create PrometheusRule for VM Alerts
+Create VM health monitoring rules:
+cat << EOF | oc apply -f -
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vm-health-alerts
+  namespace: openshift-monitoring
+  labels:
+    app: vm-monitoring
+spec:
+  groups:
+  - name: vm.health
+    rules:
+    - alert: VMHighCPUUsage
+      expr: rate(kubevirt_vmi_cpu_usage_seconds_total[5m]) * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+        service: kubevirt
+      annotations:
+        summary: "High CPU usage on VM {{ \$labels.name }}"
+        description: "VM {{ \$labels.name }} has been using more than 80% CPU for more than 5 minutes."
+    
+    - alert: VMHighMemoryUsage
+      expr: (kubevirt_vmi_memory_used_bytes / kubevirt_vmi_memory_available_bytes) * 100 > 85
+      for: 5m
+      labels:
+        severity: warning
+        service: kubevirt
+      annotations:
+        summary: "High memory usage on VM {{ \$labels.name }}"
+        description: "VM {{ \$labels.name }} is using more than 85% of available memory."
+    
+    - alert: VMDown
+      expr: up{job="kubevirt-vmi"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        service: kubevirt
+      annotations:
+        summary: "VM {{ \$labels.name }} is down"
+        description: "VM {{ \$labels.name }} has been down for more than 1 minute."
+    
+    - alert: VMDiskSpaceHigh
+      expr: kubevirt_vmi_storage_used_bytes / kubevirt_vmi_storage_capacity_bytes * 100 > 90
+      for: 10m
+      labels:
+        severity: critical
+        service: kubevirt
+      annotations:
+        summary: "VM {{ \$labels.name }} disk space is critically high"
+        description: "VM {{ \$labels.name }} disk usage is above 90% for more than 10 minutes."
+EOF
+Verify the PrometheusRule was created:
+oc get prometheusrule vm-health-alerts -n openshift-monitoring
+Check if the rules are loaded in Prometheus:
+oc port-forward -n openshift-monitoring svc/prometheus-k8s 9090:9090 &
+# Access http://localhost:9090/rules to see the loaded rules
+Subtask 3.2: Configure AlertManager for Notifications
+Create AlertManager configuration:
+cat << EOF | oc apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-vm-config
+  namespace: openshift-monitoring
+type: Opaque
+stringData:
+  alertmanager.yml: |
+    global:
+      smtp_smarthost: 'localhost:587'
+      smtp_from: 'alerts@example.com'
+    
+    route:
+      group_by: ['alertname', 'service']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 1h
+      receiver: 'vm-alerts'
+      routes:
+      - match:
+          service: kubevirt
+        receiver: 'vm-critical-alerts'
+    
+    receivers:
+    - name: 'vm-alerts'
+      webhook_configs:
+      - url: 'http://webhook-receiver:8080/webhook'
+        send_resolved: true
+    
+    - name: 'vm-critical-alerts'
+      webhook_configs:
+      - url: 'http://webhook-receiver:8080/critical'
+        send_resolved: true
+      email_configs:
+      - to: 'admin@example.com'
+        subject: 'Critical VM Alert: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          {{ end }}
+EOF
+Create a simple webhook receiver for testing:
+cat << EOF | oc apply -f -
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: webhook-receiver
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: webhook-receiver
+  template:
+    metadata:
+      labels:
+        app: webhook-receiver
+    spec:
+      containers:
+      - name: webhook
+        image: python:3.9-slim
+        ports:
+        - containerPort: 8080
+        command:
+        - python
+        - -c
+        - |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+          import json
+          import sys
+          
+          class WebhookHandler(BaseHTTPRequestHandler):
+              def do_POST(self):
+                  content_length = int(self.headers['Content-Length'])
+                  post_data = self.rfile.read(content_length)
+                  
+                  print(f"Received alert: {post_data.decode('utf-8')}")
+                  
+                  self.send_response(200)
+                  self.send_header('Content-type', 'application/json')
+                  self.end_headers()
+                  self.wfile.write(b'{"status": "ok"}')
+          
+          server = HTTPServer(('0.0.0.0', 8080), WebhookHandler)
+          print("Webhook server starting on port 8080")
+          server.serve_forever()
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-receiver
+  namespace: default
+spec:
+  selector:
+    app: webhook-receiver
+  ports:
+  - port: 8080
+    targetPort: 8080
+EOF
+Subtask 3.3: Test Alert Configuration
+Create a high-load scenario to trigger alerts:
+# Connect to the test VM and create CPU load
+VM_NAME="monitoring-test-vm"
+oc patch vm $VM_NAME --type merge -p '{"spec":{"template":{"spec":{"domain":{"cpu":{"cores":2},"resources":{"requests":{"cpu":"1000m"},"limits":{"cpu":"2000m"}}}}}}}'
+Create a script to generate load on the VM:
+cat << 'EOF' > generate-vm-load.sh
+#!/bin/bash
+
+VM_NAME="monitoring-test-vm"
+echo "Generating load on VM: $VM_NAME"
+
+# Create a pod that will stress the VM
+cat << YAML | oc apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vm-load-generator
+spec:
+  containers:
+  - name: stress
+    image: polinux/stress
+    command: ["stress"]
+    args: ["--cpu", "2", "--timeout", "300s"]
+    resources:
+      requests:
+        cpu: 500m
+        memory: 256Mi
+      limits:
+        cpu: 1000m
+        memory: 512Mi
+YAML
+
+echo "Load generator started. Monitor alerts in Prometheus/AlertManager."
+EOF
+
+chmod +x generate-vm-load.sh
+./generate-vm-load.sh
+Monitor active alerts:
+# Check Prometheus alerts
+curl -s http://localhost:9090/api/v1/alerts | jq '.data.alerts[] | select(.labels.service=="kubevirt")'
+View AlertManager status:
+oc port-forward -n openshift-monitoring svc/alertmanager-main 9093:9093 &
+# Access http://localhost:9093 to see AlertManager UI
+Subtask 3.4: Create Alert Dashboard
+Create a Grafana dashboard for alerts:
+cat << EOF > vm-alerts-dashboard.json
+{
+  "dashboard": {
+    "id": null,
+    "title": "VM Alerts Dashboard",
+    "tags": ["alerts", "kubevirt"],
+    "panels": [
+      {
+        "id": 1,
+        "title": "Active VM Alerts",
+        "type": "table",
+        "targets": [
+          {
+            "expr": "ALERTS{service=\"kubevirt\"}",
+            "format": "table"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Alert History",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "increase(prometheus_notifications_total[1h])",
+            "legendFormat": "Notifications Sent"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+      },
+      {
+        "id": 3,
+        "title": "VM Health Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "up{job=\"kubevirt-vmi\"}",
+            "legendFormat": "{{name}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+      }
+    ],
+    "time": {
+      "from": "now-6h",
+      "to": "now"
+    },
+    "refresh": "30s"
+  }
+}
+EOF
+Import the alerts dashboard:
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -u "$GRAFANA_USER:$GRAFANA_PASS" \
+  -d @vm-alerts-dashboard.json \
+  "$GRAFANA_URL/api/dashboards/db"
+Subtask 3.5: Verify Alert Functionality
+Check alert rules status:
+oc get prometheusrule vm-health-alerts -n openshift-monitoring -o yaml
+Monitor webhook receiver logs:
+oc logs -f deployment/webhook-receiver
+Test alert resolution:
+# Stop the load generator
+oc delete pod vm-load-generator
+
+# Wait for alerts to resolve
+sleep 300
+
+# Check resolved alerts
+curl -s http://localhost:9090/api/v1/alerts | jq '.data.alerts[] | select(.state=="resolved" and .labels.service=="kubevirt")'
+Troubleshooting Tips
+Common Issues and Solutions
+Metrics not appearing in Prometheus:
+
+Verify ServiceMonitor is in the correct namespace
+Check that VM pods have the correct labels
+Ensure Prometheus has permissions to scrape metrics
+Grafana dashboard not loading data:
+
+Verify Prometheus data source configuration
+Check metric names and labels in queries
+Ensure time range is appropriate
+Alerts not firing:
+
+Verify PrometheusRule syntax
+Check alert thresholds are appropriate
+Ensure metrics are being collected
+High resource usage on monitoring components:
+
+Adjust scrape intervals
+Reduce retention periods
+Optimize dashboard queries
+Verification Commands
+# Check all monitoring components
+oc get pods -n openshift-monitoring | grep -E "(prometheus|grafana|alertmanager)"
+
+# Verify VM metrics collection
+oc get servicemonitor -n openshift-monitoring
+
+# Check alert rules
+oc get prometheusrule -n openshift-monitoring
+
+# Monitor resource usage
+watch -n 10 'oc adm top nodes && echo && oc adm top pods -n openshift-monitoring'
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Implemented comprehensive VM monitoring using Prometheus and Grafana, enabling real-time visibility into virtual machine performance and health metrics
+Mastered resource monitoring techniques using OpenShift's built-in tools like oc adm top to track CPU, memory, and storage utilization across your virtual infrastructure
+Configured proactive alerting systems that automatically notify administrators of potential issues before they impact service availability
+Created custom dashboards and monitoring scripts that provide actionable insights into VM performance trends and resource utilization patterns
+This monitoring setup is crucial for maintaining healthy virtual machine environments in production. The skills you've developed enable you to:
+
+Proactively identify performance bottlenecks and resource constraints
+Implement automated alerting for critical system events
+Create comprehensive monitoring dashboards for operational visibility
+Optimize resource allocation based on actual usage patterns
+These monitoring capabilities are essential for any organization running virtual machines in OpenShift, ensuring high availability, optimal performance, and efficient resource utilization. The monitoring infrastructure you've built provides the foundation for maintaining robust, scalable virtual machine deployments in enterprise environments.
