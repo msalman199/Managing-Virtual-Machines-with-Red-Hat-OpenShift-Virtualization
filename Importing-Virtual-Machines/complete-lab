@@ -1,0 +1,272 @@
+Lab 14: Importing Virtual Machines
+Objectives
+By the end of this lab, you will be able to:
+
+Import virtual machines from external hypervisors using the Open Virtual Appliance (OVA) format
+Configure network and storage options for imported VMs in OpenShift Virtualization
+Verify VM functionality after successful import
+Understand the migration process from traditional virtualization platforms to OpenShift Virtualization
+Troubleshoot common import issues and validate VM performance
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of virtualization concepts
+Familiarity with OpenShift Virtualization fundamentals
+Knowledge of Linux command-line operations
+Understanding of networking concepts (IP addressing, VLANs)
+Basic knowledge of storage concepts in virtualization environments
+Access to OpenShift cluster with Virtualization operator installed
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already set up. Simply click Start Lab to begin - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-configured storage classes
+Sample OVA files for import testing
+Network configurations ready for VM deployment
+Task 1: Import an OVA File into OpenShift Virtualization
+Subtask 1.1: Prepare the Import Environment
+First, let's verify that OpenShift Virtualization is properly installed and ready for VM imports.
+
+Access the OpenShift Web Console
+
+Open your web browser and navigate to the OpenShift console
+Log in with your provided credentials
+Verify Virtualization Operator Status
+
+oc get csv -n openshift-cnv
+Check Available Storage Classes
+
+oc get storageclass
+Create a Dedicated Namespace for VM Imports
+
+oc new-project vm-import-lab
+Subtask 1.2: Download and Prepare Sample OVA File
+For this lab, we'll use a sample Ubuntu OVA file that's commonly available.
+
+Navigate to the VM Import Directory
+
+cd /home/lab-user/vm-imports
+Verify OVA File Availability
+
+ls -la *.ova
+Extract OVA Contents for Inspection
+
+tar -tf ubuntu-sample.ova
+Subtask 1.3: Import OVA Using the Web Console
+Navigate to Virtualization Section
+
+In the OpenShift web console, click on Virtualization in the left navigation
+Select Virtual Machines
+Start the Import Process
+
+Click Create Virtual Machine
+Select Import via URL or Upload
+Configure Import Settings
+
+Name: imported-ubuntu-vm
+Description: Ubuntu VM imported from OVA format
+Operating System: Ubuntu 20.04 LTS
+Flavor: Small (1 CPU, 2 GiB Memory)
+Subtask 1.4: Import OVA Using CLI Method
+Alternatively, you can import using the command line interface:
+
+Create VM Import Configuration
+
+cat << EOF > vm-import-config.yaml
+apiVersion: v2v.kubevirt.io/v1beta1
+kind: VirtualMachineImport
+metadata:
+  name: ubuntu-import
+  namespace: vm-import-lab
+spec:
+  providerCredentialsSecret:
+    name: ova-credentials
+  source:
+    ova:
+      url: "file:///home/lab-user/vm-imports/ubuntu-sample.ova"
+  targetVmName: imported-ubuntu-vm
+  startVm: false
+EOF
+Apply the Import Configuration
+
+oc apply -f vm-import-config.yaml
+Monitor Import Progress
+
+oc get virtualmachineimport ubuntu-import -w
+Task 2: Configure Network and Storage Options for the Imported VM
+Subtask 2.1: Configure Network Settings
+Review Current Network Configuration
+
+oc get vm imported-ubuntu-vm -o yaml | grep -A 10 networks
+Create Custom Network Attachment Definition
+
+cat << EOF > custom-network.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: vm-network
+  namespace: vm-import-lab
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "type": "bridge",
+      "bridge": "br1",
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          {
+            "address": "192.168.100.10/24"
+          }
+        ]
+      }
+    }
+EOF
+Apply Network Configuration
+
+oc apply -f custom-network.yaml
+Update VM Network Configuration
+
+oc patch vm imported-ubuntu-vm --type='merge' -p='{"spec":{"template":{"spec":{"networks":[{"name":"default","pod":{}},{"name":"vm-network","multus":{"networkName":"vm-network"}}]}}}}'
+Subtask 2.2: Configure Storage Options
+Check Current Storage Configuration
+
+oc get vm imported-ubuntu-vm -o jsonpath='{.spec.template.spec.volumes}' | jq
+Create Additional Storage Volume
+
+cat << EOF > additional-storage.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vm-data-disk
+  namespace: vm-import-lab
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+EOF
+Apply Storage Configuration
+
+oc apply -f additional-storage.yaml
+Attach Additional Storage to VM
+
+oc patch vm imported-ubuntu-vm --type='json' -p='[{"op": "add", "path": "/spec/template/spec/volumes/-", "value": {"name": "data-disk", "persistentVolumeClaim": {"claimName": "vm-data-disk"}}}, {"op": "add", "path": "/spec/template/spec/domain/devices/disks/-", "value": {"name": "data-disk", "disk": {"bus": "virtio"}}}]'
+Subtask 2.3: Configure VM Resources
+Update CPU and Memory Allocation
+
+oc patch vm imported-ubuntu-vm --type='merge' -p='{"spec":{"template":{"spec":{"domain":{"cpu":{"cores":2},"memory":{"guest":"4Gi"}}}}}}'
+Verify Resource Configuration
+
+oc get vm imported-ubuntu-vm -o jsonpath='{.spec.template.spec.domain.cpu.cores}'
+oc get vm imported-ubuntu-vm -o jsonpath='{.spec.template.spec.domain.memory.guest}'
+Task 3: Verify VM Functionality Post-Import
+Subtask 3.1: Start and Monitor the Imported VM
+Start the Virtual Machine
+
+oc patch vm imported-ubuntu-vm --type='merge' -p='{"spec":{"running":true}}'
+Monitor VM Startup Process
+
+oc get vmi imported-ubuntu-vm -w
+Check VM Status
+
+oc get vm imported-ubuntu-vm
+oc get vmi imported-ubuntu-vm
+Subtask 3.2: Access and Test VM Functionality
+Get VM Console Access
+
+virtctl console imported-ubuntu-vm
+Alternative: Use VNC Console
+
+virtctl vnc imported-ubuntu-vm
+Test Network Connectivity from VM
+
+Log into the VM console
+Run network tests:
+# Inside the VM
+ip addr show
+ping -c 4 8.8.8.8
+curl -I http://www.google.com
+Subtask 3.3: Validate Storage Configuration
+Check Disk Configuration Inside VM
+
+# Inside the VM console
+lsblk
+df -h
+Test Additional Storage Disk
+
+# Inside the VM
+sudo fdisk -l
+sudo mkfs.ext4 /dev/vdb
+sudo mkdir /mnt/data
+sudo mount /dev/vdb /mnt/data
+echo "Test file" | sudo tee /mnt/data/test.txt
+cat /mnt/data/test.txt
+Subtask 3.4: Performance and Health Verification
+Check VM Resource Usage
+
+oc top vmi imported-ubuntu-vm
+Verify VM Events
+
+oc get events --field-selector involvedObject.name=imported-ubuntu-vm
+Test VM Migration Capability
+
+oc patch vmi imported-ubuntu-vm --type='merge' -p='{"spec":{"evictionStrategy":"LiveMigrate"}}'
+Monitor VM Health Status
+
+oc get vmi imported-ubuntu-vm -o jsonpath='{.status.conditions}' | jq
+Troubleshooting Common Issues
+Import Failures
+Issue: OVA import fails with storage errors Solution:
+
+# Check storage class availability
+oc get storageclass
+# Verify PVC creation
+oc get pvc -n vm-import-lab
+# Check storage provisioner logs
+oc logs -n kube-system -l app=storage-provisioner
+Issue: Network configuration problems Solution:
+
+# Verify network attachment definitions
+oc get network-attachment-definitions -n vm-import-lab
+# Check CNI plugin status
+oc get pods -n openshift-multus
+VM Startup Issues
+Issue: VM fails to start after import Solution:
+
+# Check VM events
+oc describe vm imported-ubuntu-vm
+# Verify virtualization components
+oc get pods -n openshift-cnv
+# Check node resources
+oc describe nodes
+Validation Checklist
+Before completing this lab, ensure you have:
+
+ Successfully imported an OVA file into OpenShift Virtualization
+ Configured custom network settings for the imported VM
+ Attached additional storage to the VM
+ Started the VM and verified it's running
+ Accessed the VM console successfully
+ Tested network connectivity from within the VM
+ Verified storage configuration and functionality
+ Monitored VM performance and health status
+Conclusion
+In this lab, you have successfully learned how to import virtual machines from external hypervisors using the OVA format into OpenShift Virtualization. You've gained hands-on experience with:
+
+Key Accomplishments:
+
+VM Import Process: You imported an OVA file using both web console and CLI methods, understanding the flexibility of OpenShift Virtualization's import capabilities
+Network Configuration: You configured custom network settings, including creating network attachment definitions and assigning specific IP configurations
+Storage Management: You attached additional storage volumes and verified their functionality within the imported VM
+Validation and Testing: You performed comprehensive testing to ensure the imported VM functions correctly in its new environment
+Why This Matters: This lab simulates real-world scenarios where organizations migrate from traditional virtualization platforms like VMware vSphere or VirtualBox to OpenShift Virtualization. The skills you've developed are essential for:
+
+Cloud Migration Projects: Helping organizations move their workloads to container-based virtualization
+Hybrid Cloud Strategies: Enabling seamless VM portability between different platforms
+Infrastructure Modernization: Supporting the transition from traditional VMs to cloud-native architectures
+The ability to import, configure, and validate VMs in OpenShift Virtualization is a critical skill for managing modern virtualized environments and supporting enterprise digital transformation initiatives.

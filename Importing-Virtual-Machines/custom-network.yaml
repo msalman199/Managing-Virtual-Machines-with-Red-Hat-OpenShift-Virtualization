@@ -1,0 +1,20 @@
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: vm-network
+  namespace: vm-import-lab
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "type": "bridge",
+      "bridge": "br1",
+      "ipam": {
+        "type": "static",
+        "addresses": [
+          {
+            "address": "192.168.100.10/24"
+          }
+        ]
+      }
+    }

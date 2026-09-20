@@ -1,0 +1,13 @@
+apiVersion: v2v.kubevirt.io/v1beta1
+kind: VirtualMachineImport
+metadata:
+  name: ubuntu-import
+  namespace: vm-import-lab
+spec:
+  providerCredentialsSecret:
+    name: ova-credentials
+  source:
+    ova:
+      url: "file:///home/lab-user/vm-imports/ubuntu-sample.ova"
+  targetVmName: imported-ubuntu-vm
+  startVm: false
