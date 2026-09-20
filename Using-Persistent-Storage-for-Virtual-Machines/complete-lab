@@ -1,0 +1,334 @@
+Lab 10: Using Persistent Storage for Virtual Machines
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the concept of persistent storage in virtualized environments
+Create and configure Persistent Volumes (PV) and Persistent Volume Claims (PVC) for VM storage
+Attach persistent storage to running virtual machines
+Verify disk functionality and data persistence within VMs
+Implement best practices for VM storage management in OpenShift Virtualization
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes concepts (pods, services, namespaces)
+Familiarity with OpenShift Virtualization fundamentals
+Knowledge of Linux command-line operations
+Understanding of storage concepts (volumes, filesystems, mounting)
+Completed previous labs in the OpenShift Virtualization series
+Required Knowledge Areas
+Kubernetes Storage: Understanding of PV, PVC, and StorageClasses
+Virtual Machine Management: Basic VM operations and lifecycle
+Linux Administration: File system operations and disk management
+YAML Configuration: Ability to read and modify YAML manifests
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator installed
+kubectl and oc command-line tools configured
+Sample VM templates and storage classes available
+Web console access for GUI operations
+Task 1: Create a Persistent Volume (PV) and Persistent Volume Claim (PVC) for VM Storage
+Subtask 1.1: Examine Available Storage Classes
+First, let's explore the storage options available in your cluster.
+
+List available storage classes:
+oc get storageclass
+Get detailed information about a specific storage class:
+oc describe storageclass <storage-class-name>
+Check for default storage class:
+oc get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}'
+Subtask 1.2: Create a Persistent Volume Claim
+Create a PVC that will be used for VM disk storage.
+
+Create a PVC manifest file:
+cat > vm-disk-pvc.yaml << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vm-disk-pvc
+  namespace: default
+  labels:
+    app: vm-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: "" # Use default storage class
+EOF
+Apply the PVC configuration:
+oc apply -f vm-disk-pvc.yaml
+Verify PVC creation and status:
+oc get pvc vm-disk-pvc
+Check PVC details:
+oc describe pvc vm-disk-pvc
+Subtask 1.3: Create an Additional Data Disk PVC
+Create a second PVC for additional data storage.
+
+Create a data disk PVC manifest:
+cat > vm-data-pvc.yaml << 'EOF'
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vm-data-pvc
+  namespace: default
+  labels:
+    app: vm-data-storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: "" # Use default storage class
+EOF
+Apply the data PVC configuration:
+oc apply -f vm-data-pvc.yaml
+Verify both PVCs are available:
+oc get pvc
+Task 2: Attach the PVC to a Running VM
+Subtask 2.1: Create a Virtual Machine with Persistent Storage
+Create a VM that uses the persistent storage we configured.
+
+Create a VM manifest with attached PVCs:
+cat > vm-with-storage.yaml << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: vm-with-persistent-storage
+  namespace: default
+  labels:
+    app: storage-demo
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: vm-with-persistent-storage
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 2Gi
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+          - name: datadisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 500m
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        persistentVolumeClaim:
+          claimName: vm-disk-pvc
+      - name: datadisk
+        persistentVolumeClaim:
+          claimName: vm-data-pvc
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            user: fedora
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_authorized_keys:
+              - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC... # Add your SSH key here
+EOF
+Apply the VM configuration:
+oc apply -f vm-with-storage.yaml
+Monitor VM creation:
+oc get vm vm-with-persistent-storage
+Check VM instance status:
+oc get vmi vm-with-persistent-storage
+Subtask 2.2: Verify VM is Running
+Check VM status:
+oc get vm vm-with-persistent-storage -o jsonpath='{.status.printableStatus}'
+Get VM details:
+oc describe vm vm-with-persistent-storage
+Check associated pods:
+oc get pods -l kubevirt.io/vm=vm-with-persistent-storage
+Subtask 2.3: Access the Virtual Machine
+Connect to VM console:
+virtctl console vm-with-persistent-storage
+Note: If virtctl is not available, you can use the OpenShift web console to access the VM console.
+
+Alternative: Use SSH (if configured):
+# First, get the VM's IP address
+oc get vmi vm-with-persistent-storage -o jsonpath='{.status.interfaces[0].ipAddress}'
+
+# Then SSH to the VM
+ssh fedora@<VM_IP_ADDRESS>
+Task 3: Verify Disk Functionality Within the VM
+Subtask 3.1: Examine Disk Configuration
+Once connected to the VM, verify the attached disks.
+
+List available block devices:
+lsblk
+Check disk information:
+fdisk -l
+View disk usage:
+df -h
+Subtask 3.2: Prepare and Mount the Data Disk
+Format and mount the additional data disk.
+
+Create a partition on the data disk (assuming it's /dev/vdb):
+sudo fdisk /dev/vdb
+Follow these steps in fdisk:
+
+Press n for new partition
+Press p for primary partition
+Press 1 for partition number
+Press Enter twice to accept default start and end sectors
+Press w to write changes
+Format the partition:
+sudo mkfs.ext4 /dev/vdb1
+Create a mount point:
+sudo mkdir /mnt/data
+Mount the data disk:
+sudo mount /dev/vdb1 /mnt/data
+Verify the mount:
+df -h /mnt/data
+Subtask 3.3: Test Data Persistence
+Test that data persists across VM restarts.
+
+Create test data on the data disk:
+sudo touch /mnt/data/test-file.txt
+echo "This is persistent data" | sudo tee /mnt/data/test-file.txt
+Create test data on the root disk:
+echo "Root disk data" | sudo tee ~/root-test.txt
+Make the mount permanent (add to /etc/fstab):
+echo "/dev/vdb1 /mnt/data ext4 defaults 0 2" | sudo tee -a /etc/fstab
+Exit the VM console:
+exit
+Subtask 3.4: Test VM Restart and Data Persistence
+Stop the VM:
+oc patch vm vm-with-persistent-storage --type merge -p '{"spec":{"running":false}}'
+Wait for VM to stop:
+oc get vm vm-with-persistent-storage -w
+Start the VM again:
+oc patch vm vm-with-persistent-storage --type merge -p '{"spec":{"running":true}}'
+Wait for VM to be ready:
+oc get vmi vm-with-persistent-storage -w
+Reconnect to the VM:
+virtctl console vm-with-persistent-storage
+Verify data persistence:
+# Check if data disk is mounted
+df -h /mnt/data
+
+# Verify test files exist
+cat /mnt/data/test-file.txt
+cat ~/root-test.txt
+Advanced Configuration and Best Practices
+Storage Performance Optimization
+Check storage performance:
+# Inside the VM
+sudo dd if=/dev/zero of=/mnt/data/testfile bs=1M count=100 oflag=direct
+Monitor I/O performance:
+iostat -x 1 5
+Storage Expansion
+Expand PVC size:
+oc patch pvc vm-data-pvc -p '{"spec":{"resources":{"requests":{"storage":"8Gi"}}}}'
+Verify expansion:
+oc get pvc vm-data-pvc
+Backup and Snapshot Considerations
+Create a VM snapshot (if supported by storage class):
+cat > vm-snapshot.yaml << 'EOF'
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: vm-snapshot-1
+  namespace: default
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: vm-with-persistent-storage
+EOF
+Apply snapshot configuration:
+oc apply -f vm-snapshot.yaml
+Troubleshooting Common Issues
+Issue 1: PVC Stuck in Pending State
+Symptoms: PVC remains in "Pending" status
+
+Solutions:
+
+Check available storage classes:
+oc get storageclass
+Verify storage class supports dynamic provisioning:
+oc describe storageclass <storage-class-name>
+Check for sufficient cluster resources:
+oc get nodes
+oc describe nodes
+Issue 2: VM Cannot Start Due to Storage Issues
+Symptoms: VM fails to start with storage-related errors
+
+Solutions:
+
+Check PVC status:
+oc get pvc
+oc describe pvc <pvc-name>
+Verify VM configuration:
+oc describe vm vm-with-persistent-storage
+Check events for error messages:
+oc get events --sort-by=.metadata.creationTimestamp
+Issue 3: Disk Not Visible in VM
+Symptoms: Attached disk doesn't appear in the VM
+
+Solutions:
+
+Verify disk attachment in VM spec:
+oc get vm vm-with-persistent-storage -o yaml | grep -A 10 volumes
+Check VM events:
+oc describe vmi vm-with-persistent-storage
+Restart the VM:
+oc patch vm vm-with-persistent-storage --type merge -p '{"spec":{"running":false}}'
+oc patch vm vm-with-persistent-storage --type merge -p '{"spec":{"running":true}}'
+Cleanup
+To clean up the resources created in this lab:
+
+Stop and delete the VM:
+oc delete vm vm-with-persistent-storage
+Delete the PVCs:
+oc delete pvc vm-disk-pvc vm-data-pvc
+Remove manifest files:
+rm -f vm-disk-pvc.yaml vm-data-pvc.yaml vm-with-storage.yaml vm-snapshot.yaml
+Conclusion
+In this lab, you have successfully:
+
+Created persistent storage using Persistent Volume Claims (PVCs) for virtual machine storage
+Attached multiple storage volumes to a running virtual machine
+Verified data persistence across VM restarts and lifecycle operations
+Implemented best practices for VM storage management in OpenShift Virtualization
+Learned troubleshooting techniques for common storage-related issues
+Key Takeaways
+Why This Matters: Persistent storage is crucial for production virtual machines because it ensures:
+
+Data Durability: Your data survives VM restarts, migrations, and updates
+Scalability: Storage can be dynamically provisioned and expanded as needed
+Flexibility: Different storage classes can be used for different performance requirements
+Backup and Recovery: Persistent volumes can be backed up and restored independently
+Real-World Applications:
+
+Database VMs: Ensuring database data persists across maintenance windows
+Application Servers: Maintaining application state and configuration
+Development Environments: Preserving development work across sessions
+Enterprise Workloads: Meeting compliance and data retention requirements
+This knowledge prepares you for managing production virtual machine workloads in OpenShift Virtualization environments, where reliable and persistent storage is essential for business continuity and data integrity.

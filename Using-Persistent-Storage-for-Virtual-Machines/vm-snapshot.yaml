@@ -1,0 +1,10 @@
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: vm-snapshot-1
+  namespace: default
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: vm-with-persistent-storage
