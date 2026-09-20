@@ -1,0 +1,10 @@
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: rhel8-base-snapshot
+  namespace: default
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: rhel8-base

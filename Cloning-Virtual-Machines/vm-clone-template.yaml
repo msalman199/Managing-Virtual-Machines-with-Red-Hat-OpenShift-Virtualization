@@ -1,0 +1,89 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: vm-clone-template
+  namespace: default
+objects:
+- apiVersion: cdi.kubevirt.io/v1beta1
+  kind: DataVolume
+  metadata:
+    name: ${CLONE_NAME}-rootdisk
+    namespace: ${NAMESPACE}
+  spec:
+    source:
+      pvc:
+        name: ${SOURCE_VM}-rootdisk
+        namespace: ${NAMESPACE}
+    pvc:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: ${STORAGE_SIZE}
+      storageClassName: ${STORAGE_CLASS}
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${CLONE_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${CLONE_NAME}
+  spec:
+    running: false
+    template:
+      metadata:
+        labels:
+          kubevirt.io/vm: ${CLONE_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+          memory:
+            guest: ${MEMORY_SIZE}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          dataVolume:
+            name: ${CLONE_NAME}-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: cloud-user
+              password: redhat
+              chpasswd: { expire: False }
+parameters:
+- name: SOURCE_VM
+  description: Name of the source VM to clone
+  required: true
+- name: CLONE_NAME
+  description: Name for the cloned VM
+  required: true
+- name: NAMESPACE
+  description: Namespace for the cloned VM
+  value: default
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "2"
+- name: MEMORY_SIZE
+  description: Memory size
+  value: 4Gi
+- name: STORAGE_SIZE
+  description: Storage size
+  value: 20Gi
+- name: STORAGE_CLASS
+  description: Storage class name
+  value: local-path

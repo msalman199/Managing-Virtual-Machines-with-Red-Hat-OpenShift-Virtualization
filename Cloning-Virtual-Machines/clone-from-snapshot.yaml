@@ -1,0 +1,41 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: rhel8-snapshot-clone
+  namespace: default
+spec:
+  dataVolumeTemplates:
+  - metadata:
+      name: rhel8-snapshot-clone-rootdisk
+    spec:
+      source:
+        snapshot:
+          name: rhel8-base-snapshot
+          namespace: default
+      pvc:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: local-path
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: rhel8-snapshot-clone
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+      volumes:
+      - name: rootdisk
+        dataVolume:
+          name: rhel8-snapshot-clone-rootdisk

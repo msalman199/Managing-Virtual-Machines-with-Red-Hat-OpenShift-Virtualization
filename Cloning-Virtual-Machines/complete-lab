@@ -1,0 +1,703 @@
+Lab 15: Cloning Virtual Machines
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the concept and benefits of VM cloning in OpenShift Virtualization
+Clone virtual machines using both the OpenShift web console and CLI
+Verify cloned VM functionality and resource allocation
+Automate VM cloning tasks using YAML manifests and scripts
+Troubleshoot common cloning issues and optimize clone performance
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of virtualization concepts
+Familiarity with OpenShift fundamentals and navigation
+Knowledge of YAML syntax and Kubernetes resources
+Experience with command-line interface operations
+Completion of previous OpenShift Virtualization labs (Labs 1-14)
+Access to an OpenShift cluster with OpenShift Virtualization operator installed
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed and configured. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-configured storage classes
+Sample virtual machines ready for cloning
+CLI tools (oc, virtctl) pre-installed
+Web console access with appropriate permissions
+Task 1: Clone a VM Using the OpenShift Web Console
+Subtask 1.1: Access the OpenShift Web Console
+Open your web browser and navigate to the OpenShift web console URL provided in your lab environment
+
+Log in using the credentials provided:
+
+Username: developer
+Password: [provided in lab environment]
+Navigate to Virtualization by clicking on the Virtualization tab in the left sidebar
+
+Select Virtual Machines to view the list of available VMs
+
+Subtask 1.2: Identify the Source VM for Cloning
+Locate the source VM named rhel8-base in the virtual machines list
+
+Verify VM status - ensure the VM is in Running or Stopped state
+
+Review VM specifications by clicking on the VM name:
+
+CPU: 2 cores
+Memory: 4 GiB
+Storage: 20 GiB
+Operating System: RHEL 8
+Subtask 1.3: Create a VM Clone Using Web Console
+Select the source VM rhel8-base from the virtual machines list
+
+Click the Actions dropdown (three dots menu) next to the VM name
+
+Select Clone from the dropdown menu
+
+Configure clone settings in the clone dialog:
+
+Clone Name: rhel8-clone-web
+Namespace: default
+Description: Web console cloned VM for testing
+Review clone configuration:
+
+Verify that all specifications match the source VM
+Ensure storage class is appropriate for your environment
+Check that network settings are correct
+Click Clone to initiate the cloning process
+
+Monitor clone progress in the Virtual Machines list:
+
+Status should show Cloning initially
+Wait for status to change to Stopped or Ready
+Subtask 1.4: Verify Clone Creation
+Locate the cloned VM rhel8-clone-web in the virtual machines list
+
+Compare specifications between source and clone:
+
+CPU allocation should match
+Memory allocation should match
+Storage size should match
+Network configuration should be identical
+Check clone details by clicking on the cloned VM name:
+
+Review the Overview tab for basic information
+Check the YAML tab to see the complete configuration
+Verify the Events tab for any issues during cloning
+Task 2: Clone a VM Using the OpenShift CLI
+Subtask 2.1: Access the Command Line Interface
+Open a terminal in your lab environment
+
+Verify CLI tools are available:
+
+oc version
+virtctl version
+Log in to OpenShift cluster:
+
+oc login -u developer -p [your-password] [cluster-url]
+Set the working namespace:
+
+oc project default
+Subtask 2.2: List Available Virtual Machines
+View all virtual machines in the current namespace:
+
+oc get vm
+Get detailed information about the source VM:
+
+oc describe vm rhel8-base
+Export the source VM configuration to a YAML file:
+
+oc get vm rhel8-base -o yaml > source-vm.yaml
+Subtask 2.3: Create VM Clone Using CLI
+Create a clone configuration file by copying and modifying the source VM:
+
+cp source-vm.yaml rhel8-clone-cli.yaml
+Edit the clone configuration using a text editor:
+
+nano rhel8-clone-cli.yaml
+Modify the following fields in the YAML file:
+
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: rhel8-clone-cli
+  namespace: default
+  labels:
+    app: rhel8-clone-cli
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: rhel8-clone-cli
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        dataVolume:
+          name: rhel8-clone-cli-rootdisk
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            user: cloud-user
+            password: redhat
+            chpasswd: { expire: False }
+Create a DataVolume for the cloned disk:
+
+cat << EOF > rhel8-clone-dv.yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: rhel8-clone-cli-rootdisk
+  namespace: default
+spec:
+  source:
+    pvc:
+      name: rhel8-base-rootdisk
+      namespace: default
+  pvc:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+    storageClassName: local-path
+EOF
+Apply the DataVolume configuration:
+
+oc apply -f rhel8-clone-dv.yaml
+Wait for DataVolume to be ready:
+
+oc get dv rhel8-clone-cli-rootdisk -w
+Create the cloned VM:
+
+oc apply -f rhel8-clone-cli.yaml
+Subtask 2.4: Verify CLI Clone Creation
+Check the cloned VM status:
+
+oc get vm rhel8-clone-cli
+View detailed information about the cloned VM:
+
+oc describe vm rhel8-clone-cli
+Check DataVolume status:
+
+oc get dv
+Verify PVC creation:
+
+oc get pvc
+Task 3: Verify Clone Functionality and Resource Allocation
+Subtask 3.1: Start and Test Cloned VMs
+Start the web console cloned VM:
+
+virtctl start rhel8-clone-web
+Start the CLI cloned VM:
+
+virtctl start rhel8-clone-cli
+Monitor VM startup:
+
+oc get vm -w
+Wait for VMs to reach Running state:
+
+oc get vmi
+Subtask 3.2: Verify Resource Allocation
+Check CPU allocation for both cloned VMs:
+
+oc get vmi rhel8-clone-web -o jsonpath='{.spec.domain.cpu.cores}'
+oc get vmi rhel8-clone-cli -o jsonpath='{.spec.domain.cpu.cores}'
+Check memory allocation:
+
+oc get vmi rhel8-clone-web -o jsonpath='{.spec.domain.memory.guest}'
+oc get vmi rhel8-clone-cli -o jsonpath='{.spec.domain.memory.guest}'
+Verify storage allocation:
+
+oc get pvc | grep clone
+Check network configuration:
+
+oc describe vmi rhel8-clone-web | grep -A 5 "Networks"
+oc describe vmi rhel8-clone-cli | grep -A 5 "Networks"
+Subtask 3.3: Test VM Connectivity and Functionality
+Get VM IP addresses:
+
+oc get vmi rhel8-clone-web -o jsonpath='{.status.interfaces[0].ipAddress}'
+oc get vmi rhel8-clone-cli -o jsonpath='{.status.interfaces[0].ipAddress}'
+Test SSH connectivity to cloned VMs:
+
+virtctl ssh cloud-user@rhel8-clone-web
+virtctl ssh cloud-user@rhel8-clone-cli
+Verify system information inside each VM:
+
+# Inside the VM
+hostnamectl
+free -h
+lscpu
+df -h
+Test basic functionality:
+
+# Inside the VM
+systemctl status
+ping -c 3 8.8.8.8
+yum list installed | head -10
+Subtask 3.4: Compare Performance Metrics
+Monitor resource usage of cloned VMs:
+
+oc top pod | grep virt-launcher
+Check VM metrics using virtctl:
+
+virtctl guestosinfo rhel8-clone-web
+virtctl guestosinfo rhel8-clone-cli
+Verify disk performance:
+
+# Inside each VM
+dd if=/dev/zero of=/tmp/testfile bs=1M count=100
+rm /tmp/testfile
+Task 4: Automate VM Cloning Tasks
+Subtask 4.1: Create a VM Cloning Script
+Create a shell script for automated VM cloning:
+
+cat << 'EOF' > clone-vm.sh
+#!/bin/bash
+
+# VM Cloning Automation Script
+# Usage: ./clone-vm.sh <source-vm> <clone-name> <namespace>
+
+set -e
+
+SOURCE_VM=$1
+CLONE_NAME=$2
+NAMESPACE=${3:-default}
+
+if [ $# -lt 2 ]; then
+    echo "Usage: $0 <source-vm> <clone-name> [namespace]"
+    exit 1
+fi
+
+echo "Starting VM cloning process..."
+echo "Source VM: $SOURCE_VM"
+echo "Clone Name: $CLONE_NAME"
+echo "Namespace: $NAMESPACE"
+
+# Check if source VM exists
+if ! oc get vm $SOURCE_VM -n $NAMESPACE &>/dev/null; then
+    echo "Error: Source VM $SOURCE_VM not found in namespace $NAMESPACE"
+    exit 1
+fi
+
+# Export source VM configuration
+echo "Exporting source VM configuration..."
+oc get vm $SOURCE_VM -n $NAMESPACE -o yaml > /tmp/source-vm.yaml
+
+# Create clone configuration
+echo "Creating clone configuration..."
+sed "s/$SOURCE_VM/$CLONE_NAME/g" /tmp/source-vm.yaml | \
+sed '/resourceVersion:/d' | \
+sed '/uid:/d' | \
+sed '/creationTimestamp:/d' | \
+sed '/generation:/d' > /tmp/clone-vm.yaml
+
+# Create DataVolume for clone
+echo "Creating DataVolume for clone..."
+cat << EODV > /tmp/clone-dv.yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: ${CLONE_NAME}-rootdisk
+  namespace: $NAMESPACE
+spec:
+  source:
+    pvc:
+      name: ${SOURCE_VM}-rootdisk
+      namespace: $NAMESPACE
+  pvc:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+    storageClassName: local-path
+EODV
+
+# Apply DataVolume
+echo "Creating DataVolume..."
+oc apply -f /tmp/clone-dv.yaml
+
+# Wait for DataVolume to be ready
+echo "Waiting for DataVolume to be ready..."
+oc wait --for=condition=Ready dv/${CLONE_NAME}-rootdisk -n $NAMESPACE --timeout=300s
+
+# Create cloned VM
+echo "Creating cloned VM..."
+oc apply -f /tmp/clone-vm.yaml
+
+# Verify clone creation
+echo "Verifying clone creation..."
+oc get vm $CLONE_NAME -n $NAMESPACE
+
+echo "VM cloning completed successfully!"
+echo "Clone VM: $CLONE_NAME"
+echo "To start the VM, run: virtctl start $CLONE_NAME -n $NAMESPACE"
+
+# Cleanup temporary files
+rm -f /tmp/source-vm.yaml /tmp/clone-vm.yaml /tmp/clone-dv.yaml
+EOF
+Make the script executable:
+
+chmod +x clone-vm.sh
+Subtask 4.2: Test the Automated Cloning Script
+Run the cloning script to create a new clone:
+
+./clone-vm.sh rhel8-base rhel8-auto-clone default
+Verify the automated clone:
+
+oc get vm rhel8-auto-clone
+oc get dv rhel8-auto-clone-rootdisk
+Start the automatically cloned VM:
+
+virtctl start rhel8-auto-clone
+Test the automated clone functionality:
+
+oc get vmi rhel8-auto-clone
+virtctl ssh cloud-user@rhel8-auto-clone
+Subtask 4.3: Create a Batch Cloning Script
+Create a batch cloning script for multiple VMs:
+
+cat << 'EOF' > batch-clone.sh
+#!/bin/bash
+
+# Batch VM Cloning Script
+# Usage: ./batch-clone.sh <source-vm> <clone-prefix> <count> [namespace]
+
+set -e
+
+SOURCE_VM=$1
+CLONE_PREFIX=$2
+COUNT=$3
+NAMESPACE=${4:-default}
+
+if [ $# -lt 3 ]; then
+    echo "Usage: $0 <source-vm> <clone-prefix> <count> [namespace]"
+    exit 1
+fi
+
+echo "Starting batch VM cloning process..."
+echo "Source VM: $SOURCE_VM"
+echo "Clone Prefix: $CLONE_PREFIX"
+echo "Count: $COUNT"
+echo "Namespace: $NAMESPACE"
+
+for i in $(seq 1 $COUNT); do
+    CLONE_NAME="${CLONE_PREFIX}-${i}"
+    echo "Creating clone $i of $COUNT: $CLONE_NAME"
+    
+    ./clone-vm.sh $SOURCE_VM $CLONE_NAME $NAMESPACE
+    
+    echo "Clone $CLONE_NAME created successfully"
+    echo "---"
+done
+
+echo "Batch cloning completed!"
+echo "Created $COUNT clones with prefix: $CLONE_PREFIX"
+EOF
+Make the batch script executable:
+
+chmod +x batch-clone.sh
+Test batch cloning with 3 VMs:
+
+./batch-clone.sh rhel8-base test-vm 3 default
+Verify batch clones:
+
+oc get vm | grep test-vm
+oc get dv | grep test-vm
+Subtask 4.4: Create a YAML Template for Cloning
+Create a parameterized template for VM cloning:
+
+cat << 'EOF' > vm-clone-template.yaml
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: vm-clone-template
+  namespace: default
+objects:
+- apiVersion: cdi.kubevirt.io/v1beta1
+  kind: DataVolume
+  metadata:
+    name: ${CLONE_NAME}-rootdisk
+    namespace: ${NAMESPACE}
+  spec:
+    source:
+      pvc:
+        name: ${SOURCE_VM}-rootdisk
+        namespace: ${NAMESPACE}
+    pvc:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: ${STORAGE_SIZE}
+      storageClassName: ${STORAGE_CLASS}
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${CLONE_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${CLONE_NAME}
+  spec:
+    running: false
+    template:
+      metadata:
+        labels:
+          kubevirt.io/vm: ${CLONE_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+          memory:
+            guest: ${MEMORY_SIZE}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          dataVolume:
+            name: ${CLONE_NAME}-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: cloud-user
+              password: redhat
+              chpasswd: { expire: False }
+parameters:
+- name: SOURCE_VM
+  description: Name of the source VM to clone
+  required: true
+- name: CLONE_NAME
+  description: Name for the cloned VM
+  required: true
+- name: NAMESPACE
+  description: Namespace for the cloned VM
+  value: default
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "2"
+- name: MEMORY_SIZE
+  description: Memory size
+  value: 4Gi
+- name: STORAGE_SIZE
+  description: Storage size
+  value: 20Gi
+- name: STORAGE_CLASS
+  description: Storage class name
+  value: local-path
+EOF
+Apply the template:
+
+oc apply -f vm-clone-template.yaml
+Use the template to create a clone:
+
+oc process vm-clone-template \
+  -p SOURCE_VM=rhel8-base \
+  -p CLONE_NAME=rhel8-template-clone \
+  -p CPU_CORES=4 \
+  -p MEMORY_SIZE=8Gi | oc apply -f -
+Verify template-based clone:
+
+oc get vm rhel8-template-clone
+oc describe vm rhel8-template-clone
+Task 5: Advanced Cloning Scenarios and Troubleshooting
+Subtask 5.1: Clone Running VMs with Snapshots
+Create a snapshot of a running VM:
+
+cat << EOF > vm-snapshot.yaml
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: rhel8-base-snapshot
+  namespace: default
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: rhel8-base
+EOF
+Apply the snapshot:
+
+oc apply -f vm-snapshot.yaml
+Wait for snapshot completion:
+
+oc get vmsnapshot rhel8-base-snapshot -w
+Clone from snapshot:
+
+cat << EOF > clone-from-snapshot.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: rhel8-snapshot-clone
+  namespace: default
+spec:
+  dataVolumeTemplates:
+  - metadata:
+      name: rhel8-snapshot-clone-rootdisk
+    spec:
+      source:
+        snapshot:
+          name: rhel8-base-snapshot
+          namespace: default
+      pvc:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 20Gi
+        storageClassName: local-path
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: rhel8-snapshot-clone
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+      volumes:
+      - name: rootdisk
+        dataVolume:
+          name: rhel8-snapshot-clone-rootdisk
+EOF
+Create the snapshot-based clone:
+
+oc apply -f clone-from-snapshot.yaml
+Subtask 5.2: Troubleshoot Common Cloning Issues
+Check for storage issues:
+
+oc get pvc
+oc describe pvc | grep -A 5 -B 5 "Warning\|Error"
+Monitor DataVolume import progress:
+
+oc get dv -w
+oc describe dv | grep -A 10 "Conditions"
+Check VM events for errors:
+
+oc get events --sort-by=.metadata.creationTimestamp | grep -i error
+Verify resource quotas:
+
+oc describe quota
+oc get limitrange
+Check storage class availability:
+
+oc get storageclass
+oc describe storageclass local-path
+Subtask 5.3: Performance Optimization for Cloning
+Create a performance-optimized clone script:
+
+cat << 'EOF' > optimized-clone.sh
+#!/bin/bash
+
+# Performance-optimized VM cloning script
+SOURCE_VM=$1
+CLONE_NAME=$2
+NAMESPACE=${3:-default}
+
+# Use smart cloning when possible
+cat << EOYAML > /tmp/optimized-clone-dv.yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: ${CLONE_NAME}-rootdisk
+  namespace: $NAMESPACE
+  annotations:
+    cdi.kubevirt.io/storage.clone.token: "true"
+spec:
+  source:
+    pvc:
+      name: ${SOURCE_VM}-rootdisk
+      namespace: $NAMESPACE
+  pvc:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+    storageClassName: local-path
+    volumeMode: Block
+EOYAML
+
+oc apply -f /tmp/optimized-clone-dv.yaml
+echo "Optimized DataVolume created for faster cloning"
+EOF
+Make the optimized script executable:
+
+chmod +x optimized-clone.sh
+Test optimized cloning:
+
+./optimized-clone.sh rhel8-base rhel8-optimized-clone
+Conclusion
+In this comprehensive lab, you have successfully learned and implemented various VM cloning techniques in OpenShift Virtualization. Here's what you accomplished:
+
+Key Achievements
+VM Cloning Mastery: You learned to clone virtual machines using both the web console and CLI, understanding the benefits and use cases for each approach.
+
+Verification and Testing: You developed skills to verify clone functionality, resource allocation, and performance, ensuring cloned VMs meet requirements.
+
+Automation Excellence: You created automated scripts for single VM cloning, batch cloning, and template-based cloning, significantly improving operational efficiency.
+
+Advanced Scenarios: You explored advanced cloning scenarios including snapshot-based cloning and performance optimization techniques.
+
+Troubleshooting Skills: You gained experience in identifying and resolving common cloning issues, making you more effective in production environments.
+
+Why This Matters
+VM cloning is a critical skill in modern virtualized environments because it:
+
+Accelerates Development: Quickly provision identical environments for development and testing
+Ensures Consistency: Maintain standardized configurations across multiple VM instances
+Reduces Deployment Time: Eliminate manual VM setup and configuration processes
+Supports Scaling: Rapidly scale applications by cloning proven VM configurations
+Enables Disaster Recovery: Create backup copies of critical VMs for business continuity
+Next Steps
+With these cloning skills, you're now prepared to:
+
+Implement automated VM provisioning in production environments
+Design efficient development and testing workflows
+Create standardized VM templates for your organization
+Optimize resource utilization through smart cloning strategies
+Contribute to infrastructure automation and DevOps practices
+The automation scripts and templates you created in this lab can be adapted and extended for real-world scenarios, making you a valuable contributor to any OpenShift Virtualization deployment.

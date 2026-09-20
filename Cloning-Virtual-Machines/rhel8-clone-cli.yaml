@@ -1,0 +1,44 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: rhel8-clone-cli
+  namespace: default
+  labels:
+    app: rhel8-clone-cli
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: rhel8-clone-cli
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        memory:
+          guest: 4Gi
+        devices:
+          disks:
+          - name: rootdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: rootdisk
+        dataVolume:
+          name: rhel8-clone-cli-rootdisk
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            user: cloud-user
+            password: redhat
+            chpasswd: { expire: False }
