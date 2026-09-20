@@ -1,0 +1,10 @@
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineSnapshot
+metadata:
+  name: test-vm-snapshot-20260920-024054
+  namespace: default
+spec:
+  source:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: test-vm

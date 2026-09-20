@@ -1,0 +1,15 @@
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineRestore
+metadata:
+  name: test-vm-restore-20260920-024326
+  namespace: default
+spec:
+  target:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: test-vm
+  virtualMachineSnapshotName: Error executing template: array index out of bounds: index 0, length 0. Printing more information for debugging the template:
+	template was:
+		{.items[0].metadata.name}
+	object given to jsonpath engine was:
+		map[string]interface {}{"metadata":map[string]interface {}{"selfLink":"", "resourceVersion":""}, "kind":"List", "apiVersion":"v1", "items":[]interface {}{}}

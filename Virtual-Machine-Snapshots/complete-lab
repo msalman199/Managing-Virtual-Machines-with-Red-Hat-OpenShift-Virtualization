@@ -1,0 +1,483 @@
+Lab 11: Virtual Machine Snapshots
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the concept and importance of VM snapshots in virtualization environments
+Create snapshots of running virtual machines using OpenShift Virtualization
+Restore virtual machines from previously created snapshots
+Implement automated snapshot creation using cron jobs and shell scripts
+Manage snapshot lifecycle including creation, restoration, and deletion
+Apply best practices for snapshot management in production environments
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with OpenShift and Kubernetes concepts
+Knowledge of YAML file structure and syntax
+Understanding of virtual machine concepts
+Access to an OpenShift cluster with OpenShift Virtualization operator installed
+Basic knowledge of cron jobs and shell scripting
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-configured storage classes for VM snapshots
+Sample virtual machines ready for snapshot operations
+Command-line tools (oc, kubectl, virtctl)
+Task 1: Create a Snapshot of a Running VM
+Subtask 1.1: Verify VM Status and Prepare Environment
+First, let's check the available virtual machines and their current status.
+
+Connect to your lab environment and open a terminal
+
+List all virtual machines in your namespace:
+
+oc get vms -n default
+Check the status of running VMs:
+oc get vmis -n default
+Create a test file in the VM (if VM is accessible via SSH):
+# First, get the VM's IP address
+oc get vmis test-vm -o jsonpath='{.status.interfaces[0].ipAddress}'
+
+# SSH into the VM (replace IP_ADDRESS with actual IP)
+ssh cloud-user@IP_ADDRESS
+
+# Create a test file to verify snapshot functionality
+echo "This file was created before snapshot" > /home/cloud-user/before-snapshot.txt
+date >> /home/cloud-user/before-snapshot.txt
+exit
+Subtask 1.2: Create VM Snapshot Using CLI
+Create a snapshot YAML definition:
+cat > vm-snapshot.yaml << EOF
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineSnapshot
+metadata:
+  name: test-vm-snapshot-$(date +%Y%m%d-%H%M%S)
+  namespace: default
+spec:
+  source:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: test-vm
+EOF
+Apply the snapshot configuration:
+oc apply -f vm-snapshot.yaml
+Monitor snapshot creation progress:
+# Check snapshot status
+oc get vmsnapshot -n default
+
+# Get detailed information about the snapshot
+oc describe vmsnapshot $(oc get vmsnapshot -o name | head -1 | cut -d'/' -f2) -n default
+Wait for snapshot completion:
+# Monitor until status shows "Succeeded"
+watch -n 5 "oc get vmsnapshot -n default"
+Subtask 1.3: Verify Snapshot Creation
+List all snapshots:
+oc get vmsnapshot -n default -o wide
+Check snapshot content details:
+oc get vmsnapshotcontent -n default
+Verify storage snapshot creation:
+# Check if volume snapshots were created
+oc get volumesnapshot -n default
+Task 2: Restore the VM from a Snapshot
+Subtask 2.1: Modify VM State Before Restoration
+Make changes to the VM to demonstrate restoration:
+# SSH back into the VM
+ssh cloud-user@IP_ADDRESS
+
+# Create a new file to show it will be lost after restoration
+echo "This file was created AFTER snapshot" > /home/cloud-user/after-snapshot.txt
+date >> /home/cloud-user/after-snapshot.txt
+
+# Modify the original file
+echo "Modified after snapshot creation" >> /home/cloud-user/before-snapshot.txt
+
+# List files to confirm changes
+ls -la /home/cloud-user/
+cat /home/cloud-user/before-snapshot.txt
+exit
+Subtask 2.2: Create VM Restore Configuration
+Stop the VM before restoration:
+# Stop the virtual machine
+oc patch vm test-vm --type merge -p '{"spec":{"running":false}}' -n default
+
+# Wait for VM to stop
+oc get vmis -n default
+Create a restore YAML definition:
+# Get the snapshot name
+SNAPSHOT_NAME=$(oc get vmsnapshot -o jsonpath='{.items[0].metadata.name}' -n default)
+
+cat > vm-restore.yaml << EOF
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineRestore
+metadata:
+  name: test-vm-restore-$(date +%Y%m%d-%H%M%S)
+  namespace: default
+spec:
+  target:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: test-vm
+  virtualMachineSnapshotName: ${SNAPSHOT_NAME}
+EOF
+Subtask 2.3: Execute VM Restoration
+Apply the restore configuration:
+oc apply -f vm-restore.yaml
+Monitor restoration progress:
+# Check restore status
+oc get vmrestore -n default
+
+# Get detailed restoration information
+oc describe vmrestore $(oc get vmrestore -o name | head -1 | cut -d'/' -f2) -n default
+Wait for restoration completion:
+# Monitor until status shows "Succeeded"
+watch -n 5 "oc get vmrestore -n default"
+Subtask 2.4: Verify Restoration Success
+Start the restored VM:
+oc patch vm test-vm --type merge -p '{"spec":{"running":true}}' -n default
+Wait for VM to be ready:
+oc get vmis -n default
+Verify restoration by checking files:
+# SSH into the restored VM
+ssh cloud-user@IP_ADDRESS
+
+# Check if the file created before snapshot exists
+cat /home/cloud-user/before-snapshot.txt
+
+# Verify the file created after snapshot is gone
+ls -la /home/cloud-user/after-snapshot.txt
+
+# List all files to confirm state
+ls -la /home/cloud-user/
+exit
+Task 3: Automate Snapshot Creation Using Cron Jobs and Scripts
+Subtask 3.1: Create Snapshot Automation Script
+Create a snapshot automation script:
+cat > snapshot-automation.sh << 'EOF'
+#!/bin/bash
+
+# VM Snapshot Automation Script
+# This script creates snapshots of specified VMs with timestamp
+
+# Configuration
+NAMESPACE="default"
+VM_NAME="test-vm"
+SNAPSHOT_PREFIX="auto-snapshot"
+MAX_SNAPSHOTS=5
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1"
+}
+
+# Function to create snapshot
+create_snapshot() {
+    local vm_name=$1
+    local snapshot_name="${SNAPSHOT_PREFIX}-${vm_name}-$(date +%Y%m%d-%H%M%S)"
+    
+    log_message "Creating snapshot: $snapshot_name for VM: $vm_name"
+    
+    cat > /tmp/snapshot-${snapshot_name}.yaml << EOL
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineSnapshot
+metadata:
+  name: ${snapshot_name}
+  namespace: ${NAMESPACE}
+  labels:
+    automated: "true"
+    vm-name: "${vm_name}"
+spec:
+  source:
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    name: ${vm_name}
+EOL
+
+    # Apply the snapshot
+    if oc apply -f /tmp/snapshot-${snapshot_name}.yaml; then
+        log_message "Snapshot creation initiated successfully: $snapshot_name"
+        rm -f /tmp/snapshot-${snapshot_name}.yaml
+        return 0
+    else
+        log_message "ERROR: Failed to create snapshot: $snapshot_name"
+        return 1
+    fi
+}
+
+# Function to cleanup old snapshots
+cleanup_old_snapshots() {
+    local vm_name=$1
+    
+    log_message "Cleaning up old snapshots for VM: $vm_name"
+    
+    # Get snapshots sorted by creation time (oldest first)
+    local snapshots=$(oc get vmsnapshot -n $NAMESPACE \
+        -l automated=true,vm-name=$vm_name \
+        --sort-by=.metadata.creationTimestamp \
+        -o jsonpath='{.items[*].metadata.name}')
+    
+    local snapshot_array=($snapshots)
+    local snapshot_count=${#snapshot_array[@]}
+    
+    if [ $snapshot_count -gt $MAX_SNAPSHOTS ]; then
+        local snapshots_to_delete=$((snapshot_count - MAX_SNAPSHOTS))
+        log_message "Found $snapshot_count snapshots, deleting oldest $snapshots_to_delete"
+        
+        for ((i=0; i<snapshots_to_delete; i++)); do
+            local snapshot_to_delete=${snapshot_array[$i]}
+            log_message "Deleting old snapshot: $snapshot_to_delete"
+            oc delete vmsnapshot $snapshot_to_delete -n $NAMESPACE
+        done
+    else
+        log_message "Snapshot count ($snapshot_count) is within limit ($MAX_SNAPSHOTS)"
+    fi
+}
+
+# Main execution
+main() {
+    log_message "Starting automated snapshot process"
+    
+    # Check if VM exists
+    if ! oc get vm $VM_NAME -n $NAMESPACE >/dev/null 2>&1; then
+        log_message "ERROR: VM $VM_NAME not found in namespace $NAMESPACE"
+        exit 1
+    fi
+    
+    # Create snapshot
+    if create_snapshot $VM_NAME; then
+        # Wait a moment for snapshot to be registered
+        sleep 10
+        
+        # Cleanup old snapshots
+        cleanup_old_snapshots $VM_NAME
+        
+        log_message "Automated snapshot process completed successfully"
+    else
+        log_message "ERROR: Automated snapshot process failed"
+        exit 1
+    fi
+}
+
+# Execute main function
+main "$@"
+EOF
+Make the script executable:
+chmod +x snapshot-automation.sh
+Test the automation script:
+./snapshot-automation.sh
+Subtask 3.2: Create Kubernetes CronJob for Automation
+Create a ConfigMap for the script:
+oc create configmap snapshot-script --from-file=snapshot-automation.sh -n default
+Create a CronJob YAML definition:
+cat > snapshot-cronjob.yaml << EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vm-snapshot-automation
+  namespace: default
+spec:
+  schedule: "0 2 * * *"  # Run daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: snapshot-automation-sa
+          containers:
+          - name: snapshot-automation
+            image: registry.redhat.io/ubi8/ubi:latest
+            command:
+            - /bin/bash
+            - /scripts/snapshot-automation.sh
+            volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+            env:
+            - name: KUBECONFIG
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+          volumes:
+          - name: script-volume
+            configMap:
+              name: snapshot-script
+              defaultMode: 0755
+          restartPolicy: OnFailure
+EOF
+Create necessary RBAC resources:
+cat > snapshot-rbac.yaml << EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: snapshot-automation-sa
+  namespace: default
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: default
+  name: snapshot-automation-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "configmaps"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances"]
+  verbs: ["get", "list"]
+- apiGroups: ["snapshot.kubevirt.io"]
+  resources: ["virtualmachinesnapshots", "virtualmachinesnapshotcontents", "virtualmachinerestores"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+- apiGroups: ["snapshot.storage.k8s.io"]
+  resources: ["volumesnapshots", "volumesnapshotcontents"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: snapshot-automation-binding
+  namespace: default
+subjects:
+- kind: ServiceAccount
+  name: snapshot-automation-sa
+  namespace: default
+roleRef:
+  kind: Role
+  name: snapshot-automation-role
+  apiGroup: rbac.authorization.k8s.io
+EOF
+Apply RBAC and CronJob configurations:
+oc apply -f snapshot-rbac.yaml
+oc apply -f snapshot-cronjob.yaml
+Subtask 3.3: Create Manual Cron Job Alternative
+Create a traditional cron job (alternative approach):
+# Create a wrapper script for cron
+cat > cron-snapshot-wrapper.sh << 'EOF'
+#!/bin/bash
+
+# Set environment variables for OpenShift CLI
+export KUBECONFIG=/path/to/your/kubeconfig
+export PATH=$PATH:/usr/local/bin
+
+# Change to script directory
+cd /home/cloud-user
+
+# Execute the snapshot automation script
+./snapshot-automation.sh >> /var/log/vm-snapshots.log 2>&1
+EOF
+
+chmod +x cron-snapshot-wrapper.sh
+Add cron job entry:
+# Edit crontab
+crontab -e
+
+# Add the following line to run snapshots daily at 2 AM:
+# 0 2 * * * /home/cloud-user/cron-snapshot-wrapper.sh
+Verify cron job installation:
+crontab -l
+Subtask 3.4: Test and Monitor Automation
+Manually trigger the CronJob for testing:
+oc create job --from=cronjob/vm-snapshot-automation manual-snapshot-test -n default
+Monitor job execution:
+# Check job status
+oc get jobs -n default
+
+# Check pod logs
+oc logs job/manual-snapshot-test -n default
+Verify automated snapshots:
+# List snapshots with automation labels
+oc get vmsnapshot -n default -l automated=true
+
+# Check snapshot details
+oc get vmsnapshot -n default -o wide
+Create a monitoring script:
+cat > monitor-snapshots.sh << 'EOF'
+#!/bin/bash
+
+echo "=== VM Snapshot Status Report ==="
+echo "Generated on: $(date)"
+echo
+
+echo "=== All Snapshots ==="
+oc get vmsnapshot -n default -o wide
+
+echo
+echo "=== Automated Snapshots ==="
+oc get vmsnapshot -n default -l automated=true -o wide
+
+echo
+echo "=== Recent CronJob Executions ==="
+oc get jobs -n default | grep vm-snapshot
+
+echo
+echo "=== Storage Usage ==="
+oc get volumesnapshot -n default
+
+echo "=== End of Report ==="
+EOF
+
+chmod +x monitor-snapshots.sh
+Run the monitoring script:
+./monitor-snapshots.sh
+Troubleshooting Tips
+Common Issues and Solutions
+Issue 1: Snapshot Creation Fails
+
+Symptom: Snapshot remains in "InProgress" state
+Solution: Check storage class supports snapshots and has sufficient space
+# Check storage class capabilities
+oc get storageclass -o yaml
+
+# Check PVC status
+oc get pvc -n default
+Issue 2: VM Restore Fails
+
+Symptom: Restore operation fails or VM won't start
+Solution: Ensure VM is stopped before restoration
+# Force stop VM if needed
+oc patch vm test-vm --type merge -p '{"spec":{"running":false}}' -n default
+
+# Check VM status
+oc get vm test-vm -n default -o yaml
+Issue 3: CronJob Not Executing
+
+Symptom: No automated snapshots created
+Solution: Check RBAC permissions and CronJob configuration
+# Check CronJob status
+oc describe cronjob vm-snapshot-automation -n default
+
+# Check service account permissions
+oc auth can-i create vmsnapshot --as=system:serviceaccount:default:snapshot-automation-sa
+Issue 4: Too Many Snapshots
+
+Symptom: Storage space running low
+Solution: Implement cleanup policies
+# Manual cleanup of old snapshots
+oc get vmsnapshot -n default --sort-by=.metadata.creationTimestamp
+
+# Delete specific snapshot
+oc delete vmsnapshot SNAPSHOT_NAME -n default
+Best Practices
+Snapshot Naming Convention: Use consistent naming with timestamps
+Retention Policy: Implement automatic cleanup of old snapshots
+Monitoring: Set up alerts for snapshot failures
+Testing: Regularly test restore procedures
+Documentation: Maintain records of snapshot schedules and retention policies
+Conclusion
+In this lab, you have successfully learned how to manage virtual machine snapshots in OpenShift Virtualization. You accomplished the following key tasks:
+
+Created VM Snapshots: You learned how to create point-in-time snapshots of running virtual machines, which serve as crucial backup points for system recovery.
+
+Restored VMs from Snapshots: You practiced the restoration process, understanding how to revert a virtual machine to a previous state when needed.
+
+Implemented Automation: You created automated snapshot solutions using both Kubernetes CronJobs and traditional cron jobs, ensuring regular backup schedules without manual intervention.
+
+Applied Best Practices: You learned about snapshot lifecycle management, including cleanup policies and monitoring strategies.
+
+Why This Matters: VM snapshots are essential for:
+
+Disaster Recovery: Quick restoration from system failures
+Testing and Development: Safe environment for testing changes
+Compliance: Meeting backup and retention requirements
+Operational Efficiency: Automated backup processes reduce manual overhead
+These skills are fundamental for managing production virtualization environments and are directly applicable to enterprise scenarios where data protection and system availability are critical business requirements.
+
+The automation techniques you've learned will help you implement robust backup strategies that scale with your infrastructure needs while maintaining consistent protection for your virtual workloads.

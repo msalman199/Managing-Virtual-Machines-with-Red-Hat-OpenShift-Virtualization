@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vm-snapshot-automation
+  namespace: default
+spec:
+  schedule: "0 2 * * *"  # Run daily at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: snapshot-automation-sa
+          containers:
+          - name: snapshot-automation
+            image: registry.redhat.io/ubi8/ubi:latest
+            command:
+            - /bin/bash
+            - /scripts/snapshot-automation.sh
+            volumeMounts:
+            - name: script-volume
+              mountPath: /scripts
+            env:
+            - name: KUBECONFIG
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+          volumes:
+          - name: script-volume
+            configMap:
+              name: snapshot-script
+              defaultMode: 0755
+          restartPolicy: OnFailure
