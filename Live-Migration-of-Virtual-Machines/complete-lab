@@ -1,0 +1,515 @@
+Lab 13: Live Migration of Virtual Machines
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the concept and benefits of live migration in virtualized environments
+Configure and enable live migration for virtual machines using virtctl
+Successfully migrate running VMs between OpenShift nodes without service interruption
+Monitor and evaluate migration performance metrics
+Verify VM state consistency and functionality after migration
+Troubleshoot common live migration issues
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of virtualization concepts
+Familiarity with OpenShift Container Platform
+Knowledge of Kubernetes fundamentals
+Experience with command-line interfaces
+Understanding of virtual machine lifecycle management
+Completed previous labs in the OpenShift Virtualization series
+Required Knowledge Areas
+OpenShift Virtualization architecture
+Virtual machine resource management
+Network connectivity concepts
+Storage considerations for VMs
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or configure the infrastructure.
+
+Your lab environment includes:
+
+Multi-node OpenShift cluster with OpenShift Virtualization installed
+Pre-configured storage classes supporting live migration
+Sample virtual machines ready for migration testing
+Monitoring tools for performance analysis
+Task 1: Enable Live Migration for VMs using virtctl
+Subtask 1.1: Verify OpenShift Virtualization Installation
+First, let's confirm that OpenShift Virtualization is properly installed and configured for live migration.
+
+Check OpenShift Virtualization Operator status:
+oc get csv -n openshift-cnv | grep kubevirt
+Verify HyperConverged resource:
+oc get hyperconverged -n openshift-cnv
+Check if live migration is enabled:
+oc get kubevirt -n openshift-cnv -o yaml | grep -A 10 liveMigration
+Subtask 1.2: Install and Configure virtctl
+The virtctl command-line tool is essential for managing virtual machines and performing live migrations.
+
+Download and install virtctl:
+# Get the latest virtctl version
+VIRTCTL_VERSION=$(oc get kubevirt.kubevirt.io/kubevirt -n openshift-cnv -o=jsonpath="{.status.observedKubeVirtVersion}")
+
+# Download virtctl
+curl -L -o virtctl https://github.com/kubevirt/kubevirt/releases/download/${VIRTCTL_VERSION}/virtctl-${VIRTCTL_VERSION}-linux-amd64
+
+# Make it executable
+chmod +x virtctl
+
+# Move to PATH
+sudo mv virtctl /usr/local/bin/
+Verify virtctl installation:
+virtctl version
+Subtask 1.3: Configure Live Migration Settings
+Configure the cluster-wide live migration settings for optimal performance.
+
+Create a live migration configuration:
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: KubeVirt
+metadata:
+  name: kubevirt
+  namespace: openshift-cnv
+spec:
+  configuration:
+    liveMigrationConfig:
+      completionTimeoutPerGiB: 800
+      progressTimeout: 150
+      parallelMigrationsPerCluster: 5
+      parallelOutboundMigrationsPerNode: 2
+      bandwidthPerMigration: "64Mi"
+      allowAutoConverge: false
+      allowPostCopy: false
+EOF
+Verify the configuration:
+oc get kubevirt kubevirt -n openshift-cnv -o yaml | grep -A 15 liveMigrationConfig
+Subtask 1.4: Check Node Readiness for Live Migration
+Ensure all nodes in the cluster are properly configured for live migration.
+
+List all nodes:
+oc get nodes
+Check node labels for live migration:
+oc get nodes --show-labels | grep kubevirt
+Verify shared storage availability:
+oc get storageclass
+Task 2: Migrate a Running VM Between OpenShift Nodes
+Subtask 2.1: Create a Test Virtual Machine
+Let's create a virtual machine that we'll use for testing live migration.
+
+Create a VM with shared storage:
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: migration-test-vm
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: migration-test-vm
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - masquerade: {}
+            name: default
+        machine:
+          type: pc-q35-rhel8.4.0
+        resources:
+          requests:
+            memory: 2Gi
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+        name: containerdisk
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            packages:
+              - stress
+        name: cloudinitdisk
+EOF
+Wait for the VM to be ready:
+oc wait --for=condition=Ready vmi/migration-test-vm --timeout=300s
+Check VM status and current node:
+oc get vmi migration-test-vm -o wide
+Subtask 2.2: Prepare VM for Migration Testing
+Before migrating, let's set up some workload in the VM to test continuity.
+
+Connect to the VM console:
+virtctl console migration-test-vm
+Inside the VM, start a continuous process (login with user: fedora, password: fedora):
+# Create a simple script that writes timestamps
+while true; do
+  echo "$(date): VM is running on $(hostname)" >> /tmp/migration-test.log
+  sleep 5
+done &
+
+# Start a light CPU load
+stress --cpu 1 --timeout 600s &
+Exit the console (Ctrl+] to disconnect)
+Subtask 2.3: Perform Live Migration
+Now let's perform the actual live migration of our running VM.
+
+Check available target nodes:
+oc get nodes -l node-role.kubernetes.io/worker=
+Initiate live migration:
+virtctl migrate migration-test-vm
+Monitor migration progress:
+# Watch the migration status
+oc get vmim -w
+
+# In another terminal, monitor the VM instance
+watch "oc get vmi migration-test-vm -o wide"
+Check migration details:
+oc describe vmim $(oc get vmim -o name | head -1)
+Subtask 2.4: Alternative Migration Methods
+Learn different ways to trigger live migration.
+
+Migration using YAML manifest:
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstanceMigration
+metadata:
+  name: manual-migration-$(date +%s)
+spec:
+  vmiName: migration-test-vm
+EOF
+Migration to specific node:
+# First, get target node name
+TARGET_NODE=$(oc get nodes -l node-role.kubernetes.io/worker= -o jsonpath='{.items[1].metadata.name}')
+
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstanceMigration
+metadata:
+  name: targeted-migration-$(date +%s)
+spec:
+  vmiName: migration-test-vm
+  nodeSelector:
+    kubernetes.io/hostname: ${TARGET_NODE}
+EOF
+Task 3: Test Migration Performance and Verify VM State Post-Migration
+Subtask 3.1: Monitor Migration Performance
+Let's analyze the performance characteristics of our live migration.
+
+Create a performance monitoring script:
+cat << 'EOF' > migration-monitor.sh
+#!/bin/bash
+
+VM_NAME="migration-test-vm"
+MIGRATION_NAME=$(oc get vmim -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+
+if [ -z "$MIGRATION_NAME" ]; then
+    echo "No active migration found"
+    exit 1
+fi
+
+echo "Monitoring migration: $MIGRATION_NAME"
+echo "=================================="
+
+while oc get vmim $MIGRATION_NAME >/dev/null 2>&1; do
+    # Get migration status
+    STATUS=$(oc get vmim $MIGRATION_NAME -o jsonpath='{.status.phase}')
+    
+    # Get VM current node
+    CURRENT_NODE=$(oc get vmi $VM_NAME -o jsonpath='{.status.nodeName}')
+    
+    # Get migration progress if available
+    PROGRESS=$(oc get vmim $MIGRATION_NAME -o jsonpath='{.status}' | jq -r '.conditions[]? | select(.type=="Running") | .message' 2>/dev/null || echo "N/A")
+    
+    echo "$(date): Status=$STATUS, Current Node=$CURRENT_NODE"
+    
+    sleep 2
+done
+
+echo "Migration completed!"
+EOF
+
+chmod +x migration-monitor.sh
+Run the monitoring script during migration:
+./migration-monitor.sh
+Subtask 3.2: Collect Migration Metrics
+Gather detailed metrics about the migration process.
+
+Check migration duration and statistics:
+# Get completed migration details
+COMPLETED_MIGRATION=$(oc get vmim -o jsonpath='{.items[0].metadata.name}')
+
+oc get vmim $COMPLETED_MIGRATION -o yaml | grep -A 20 status:
+Analyze migration events:
+oc get events --field-selector involvedObject.name=migration-test-vm --sort-by='.lastTimestamp'
+Check VM resource usage during migration:
+# Monitor VM metrics (if monitoring is available)
+oc get --raw "/api/v1/namespaces/default/pods/virt-launcher-migration-test-vm-*/proxy/metrics" | grep -E "(cpu|memory)"
+Subtask 3.3: Verify VM State and Functionality
+Ensure the VM maintained its state and functionality throughout the migration.
+
+Verify VM is running on new node:
+oc get vmi migration-test-vm -o wide
+Check VM accessibility:
+# Test network connectivity
+virtctl expose vmi migration-test-vm --port=22 --name=migration-test-ssh --type=NodePort
+
+# Get the service details
+oc get svc migration-test-ssh
+Verify application continuity:
+# Connect to VM and check our test log
+virtctl console migration-test-vm
+
+# Inside the VM, check the log file
+tail -20 /tmp/migration-test.log
+
+# Verify no gaps in timestamps during migration
+Subtask 3.4: Performance Benchmarking
+Create a comprehensive performance test for migration scenarios.
+
+Create a migration performance test script:
+cat << 'EOF' > migration-perf-test.sh
+#!/bin/bash
+
+VM_NAME="perf-test-vm"
+RESULTS_FILE="migration-results.txt"
+
+echo "Migration Performance Test Results" > $RESULTS_FILE
+echo "=================================" >> $RESULTS_FILE
+echo "Test Date: $(date)" >> $RESULTS_FILE
+echo "" >> $RESULTS_FILE
+
+# Function to create test VM
+create_test_vm() {
+    local vm_name=$1
+    local memory_size=$2
+    
+    cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ${vm_name}
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ${vm_name}
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+        resources:
+          requests:
+            memory: ${memory_size}
+      volumes:
+      - containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+        name: containerdisk
+EOF
+}
+
+# Function to measure migration time
+measure_migration() {
+    local vm_name=$1
+    local test_name=$2
+    
+    echo "Starting migration test: $test_name"
+    
+    # Wait for VM to be ready
+    oc wait --for=condition=Ready vmi/$vm_name --timeout=300s
+    
+    # Record start time
+    START_TIME=$(date +%s)
+    
+    # Start migration
+    virtctl migrate $vm_name
+    
+    # Wait for migration to complete
+    while oc get vmim -l kubevirt.io/vmi-name=$vm_name | grep -q Running; do
+        sleep 1
+    done
+    
+    # Record end time
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+    
+    echo "$test_name: ${DURATION}s" >> $RESULTS_FILE
+    
+    # Clean up migration objects
+    oc delete vmim -l kubevirt.io/vmi-name=$vm_name
+    
+    echo "Migration completed in ${DURATION} seconds"
+}
+
+# Test different VM sizes
+echo "Testing migration performance with different VM sizes..."
+
+# Small VM test
+create_test_vm "small-vm" "1Gi"
+measure_migration "small-vm" "Small VM (1Gi RAM)"
+oc delete vm small-vm
+
+# Medium VM test
+create_test_vm "medium-vm" "2Gi"
+measure_migration "medium-vm" "Medium VM (2Gi RAM)"
+oc delete vm medium-vm
+
+# Large VM test
+create_test_vm "large-vm" "4Gi"
+measure_migration "large-vm" "Large VM (4Gi RAM)"
+oc delete vm large-vm
+
+echo "Performance testing completed. Results saved to $RESULTS_FILE"
+cat $RESULTS_FILE
+EOF
+
+chmod +x migration-perf-test.sh
+Run the performance test:
+./migration-perf-test.sh
+Subtask 3.5: Troubleshooting Common Migration Issues
+Learn to identify and resolve common live migration problems.
+
+Check for migration failures:
+# Look for failed migrations
+oc get vmim --field-selector=status.phase=Failed
+
+# Get detailed failure information
+oc describe vmim $(oc get vmim --field-selector=status.phase=Failed -o name | head -1)
+Common troubleshooting commands:
+# Check node resources
+oc describe nodes | grep -A 5 "Allocated resources"
+
+# Verify storage class supports migration
+oc get storageclass -o yaml | grep -A 5 -B 5 volumeBindingMode
+
+# Check network policies
+oc get networkpolicies
+
+# Verify VM migration policy
+oc get migrationpolicy -A
+Create a troubleshooting checklist script:
+cat << 'EOF' > migration-troubleshoot.sh
+#!/bin/bash
+
+echo "Live Migration Troubleshooting Checklist"
+echo "========================================"
+
+echo "1. Checking OpenShift Virtualization status..."
+oc get csv -n openshift-cnv | grep kubevirt
+
+echo -e "\n2. Checking HyperConverged configuration..."
+oc get hyperconverged -n openshift-cnv -o yaml | grep -A 10 liveMigration
+
+echo -e "\n3. Checking node readiness..."
+oc get nodes -o wide
+
+echo -e "\n4. Checking storage classes..."
+oc get storageclass
+
+echo -e "\n5. Checking current migrations..."
+oc get vmim -A
+
+echo -e "\n6. Checking recent events..."
+oc get events --sort-by='.lastTimestamp' | tail -10
+
+echo -e "\n7. Checking VM instances..."
+oc get vmi -A
+
+echo -e "\nTroubleshooting complete!"
+EOF
+
+chmod +x migration-troubleshoot.sh
+Advanced Migration Scenarios
+Scenario 1: Scheduled Migration
+Create automated migration policies for maintenance scenarios.
+
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: MigrationPolicy
+metadata:
+  name: maintenance-migration-policy
+spec:
+  selectors:
+    namespaceSelector:
+      matchLabels:
+        migration-policy: "maintenance"
+    virtualMachineInstanceSelector:
+      matchLabels:
+        workload-type: "production"
+  allowAutoConverge: true
+  bandwidthPerMigration: "128Mi"
+  completionTimeoutPerGiB: 600
+EOF
+Scenario 2: Emergency Migration
+Handle urgent migration scenarios with priority settings.
+
+cat << EOF | oc apply -f -
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstanceMigration
+metadata:
+  name: emergency-migration
+spec:
+  vmiName: migration-test-vm
+  priority: 1000
+EOF
+Cleanup
+Clean up the resources created during this lab.
+
+# Delete test VMs
+oc delete vm migration-test-vm
+
+# Delete services
+oc delete svc migration-test-ssh
+
+# Delete migration policies
+oc delete migrationpolicy maintenance-migration-policy
+
+# Clean up any remaining migration objects
+oc delete vmim --all
+
+echo "Cleanup completed!"
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Configured live migration for OpenShift Virtualization using virtctl and cluster-wide settings
+Performed seamless VM migration between nodes without service interruption or data loss
+Monitored migration performance and analyzed key metrics including duration, resource usage, and success rates
+Verified VM state consistency before and after migration, ensuring application continuity
+Implemented troubleshooting procedures for common migration issues and failure scenarios
+Created automated testing scripts for performance benchmarking and validation
+Why This Matters
+Live migration is a critical capability in modern virtualized environments that enables:
+
+Zero-downtime maintenance of physical infrastructure
+Dynamic load balancing across cluster nodes
+High availability for critical workloads
+Efficient resource utilization in cloud environments
+Seamless scaling operations without service disruption
+Key Takeaways
+Proper configuration of storage and networking is essential for successful live migration
+Performance monitoring helps optimize migration policies for different workload types
+Automated testing ensures migration reliability in production environments
+Troubleshooting skills are crucial for maintaining high availability in virtualized infrastructure
+Next Steps
+Explore advanced migration policies for different workload types
+Implement automated migration triggers based on resource utilization
+Integrate migration capabilities with disaster recovery procedures
+Study migration performance optimization techniques for large-scale deployments
+This lab has provided you with practical, hands-on experience in managing live migration of virtual machines in OpenShift Virtualization environments, preparing you for real-world scenarios where high availability and seamless operations are critical requirements.
