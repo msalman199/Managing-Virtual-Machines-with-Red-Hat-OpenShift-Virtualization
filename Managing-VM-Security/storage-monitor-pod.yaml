@@ -1,0 +1,24 @@
+# storage-monitor-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: storage-monitor
+  namespace: vm-security-lab
+  labels:
+    app: storage-monitor
+spec:
+  serviceAccountName: vm-admin-sa
+  containers:
+  - name: monitor
+    image: bitnami/kubectl:latest
+    command: ["/bin/bash"]
+    args: ["/scripts/monitor.sh"]
+    volumeMounts:
+    - name: scripts
+      mountPath: /scripts
+  volumes:
+  - name: scripts
+    configMap:
+      name: storage-monitor-config
+      defaultMode: 0755
+  restartPolicy: Always

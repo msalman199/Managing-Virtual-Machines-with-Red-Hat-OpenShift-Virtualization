@@ -1,0 +1,23 @@
+# encrypted-database-pv.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: encrypted-db-pv
+  labels:
+    type: encrypted
+    usage: database
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: encrypted-ssd
+  hostPath:
+    path: /mnt/encrypted-db-data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: Exists

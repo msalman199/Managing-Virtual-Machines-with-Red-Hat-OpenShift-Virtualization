@@ -1,0 +1,19 @@
+# secure-storage-class.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: secure-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: kubernetes.io/no-provisioner
+parameters:
+  type: ssd
+  encrypted: "true"
+  fsType: ext4
+  accessModes: ReadWriteOnce
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
+reclaimPolicy: Retain
+mountOptions:
+  - noatime
+  - nodiratime

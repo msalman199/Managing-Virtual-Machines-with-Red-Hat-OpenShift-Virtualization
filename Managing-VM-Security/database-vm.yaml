@@ -1,0 +1,52 @@
+# database-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: database-vm
+  namespace: vm-security-lab
+  labels:
+    vm-type: database
+    security-zone: secure
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: database-vm
+        vm-type: database
+        security-zone: secure
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            packages:
+              - mysql-server
+            runcmd:
+              - systemctl enable mysqld
+              - systemctl start mysqld

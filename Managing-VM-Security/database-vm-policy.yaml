@@ -1,0 +1,44 @@
+# database-vm-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-vm-policy
+  namespace: vm-security-lab
+spec:
+  podSelector:
+    matchLabels:
+      vm-type: database
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          vm-type: application
+    ports:
+    - protocol: TCP
+      port: 3306
+    - protocol: TCP
+      port: 5432
+  - from:
+    - podSelector:
+        matchLabels:
+          role: admin
+    ports:
+    - protocol: TCP
+      port: 22
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - podSelector:
+        matchLabels:
+          vm-type: backup
+    ports:
+    - protocol: TCP
+      port: 22

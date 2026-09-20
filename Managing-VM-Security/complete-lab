@@ -1,0 +1,892 @@
+Lab 18: Managing VM Security
+Objectives
+By the end of this lab, students will be able to:
+
+Configure Role-Based Access Control (RBAC) for virtual machine user access in OpenShift Virtualization
+Implement network policies to isolate virtual machine traffic and enhance security
+Secure virtual machine storage using encryption and access controls
+Apply security best practices for virtual machine management in containerized environments
+Understand the relationship between Kubernetes security concepts and virtual machine security
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Kubernetes concepts (pods, services, namespaces)
+Knowledge of OpenShift fundamentals
+Understanding of virtual machine concepts
+Basic networking knowledge (IP addresses, subnets, ports)
+Familiarity with YAML configuration files
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed. Simply click Start Lab to access your environment - no need to build your own VM or install software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator installed
+kubectl and oc command-line tools configured
+Sample virtual machines for testing
+Pre-configured storage classes with encryption capabilities
+Task 1: Configure RBAC for VM User Access
+Role-Based Access Control (RBAC) is crucial for managing who can access and modify virtual machines in your OpenShift environment. We'll create different user roles with specific permissions.
+
+Subtask 1.1: Create Custom Roles for VM Management
+First, let's create specific roles for different levels of VM access.
+
+Create a VM Viewer Role
+Create a role that allows users to view VMs but not modify them:
+
+# vm-viewer-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: vm-security-lab
+  name: vm-viewer
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["virtualmachines/console"]
+  verbs: ["get"]
+Apply the role:
+
+oc create namespace vm-security-lab
+oc apply -f vm-viewer-role.yaml
+Create a VM Operator Role
+Create a role for users who can manage VMs but not delete them:
+
+# vm-operator-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: vm-security-lab
+  name: vm-operator
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods", "services", "persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["virtualmachines/start", "virtualmachines/stop", "virtualmachines/restart"]
+  verbs: ["update"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["virtualmachines/console", "virtualmachines/vnc"]
+  verbs: ["get"]
+Apply the operator role:
+
+oc apply -f vm-operator-role.yaml
+Create a VM Administrator Role
+Create a role with full VM management permissions:
+
+# vm-admin-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: vm-security-lab
+  name: vm-admin
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources: ["*"]
+  verbs: ["*"]
+- apiGroups: [""]
+  resources: ["pods", "services", "persistentvolumeclaims", "configmaps", "secrets"]
+  verbs: ["*"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["*"]
+  verbs: ["*"]
+Apply the admin role:
+
+oc apply -f vm-admin-role.yaml
+Subtask 1.2: Create Service Accounts and Bind Roles
+Now we'll create service accounts and bind them to our custom roles.
+
+Create Service Accounts
+# Create service accounts for different user types
+oc create serviceaccount vm-viewer-sa -n vm-security-lab
+oc create serviceaccount vm-operator-sa -n vm-security-lab
+oc create serviceaccount vm-admin-sa -n vm-security-lab
+Create Role Bindings
+Bind the service accounts to their respective roles:
+
+# vm-role-bindings.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vm-viewer-binding
+  namespace: vm-security-lab
+subjects:
+- kind: ServiceAccount
+  name: vm-viewer-sa
+  namespace: vm-security-lab
+roleRef:
+  kind: Role
+  name: vm-viewer
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vm-operator-binding
+  namespace: vm-security-lab
+subjects:
+- kind: ServiceAccount
+  name: vm-operator-sa
+  namespace: vm-security-lab
+roleRef:
+  kind: Role
+  name: vm-operator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vm-admin-binding
+  namespace: vm-security-lab
+subjects:
+- kind: ServiceAccount
+  name: vm-admin-sa
+  namespace: vm-security-lab
+roleRef:
+  kind: Role
+  name: vm-admin
+  apiGroup: rbac.authorization.k8s.io
+Apply the role bindings:
+
+oc apply -f vm-role-bindings.yaml
+Subtask 1.3: Test RBAC Configuration
+Let's test our RBAC setup by creating tokens and testing permissions.
+
+Generate Service Account Tokens
+# Create tokens for testing
+oc create token vm-viewer-sa -n vm-security-lab --duration=1h > viewer-token.txt
+oc create token vm-operator-sa -n vm-security-lab --duration=1h > operator-token.txt
+oc create token vm-admin-sa -n vm-security-lab --duration=1h > admin-token.txt
+Test Viewer Permissions
+# Test with viewer token
+VIEWER_TOKEN=$(cat viewer-token.txt)
+oc --token=$VIEWER_TOKEN get vms -n vm-security-lab
+# This should work
+
+# Try to create a VM (should fail)
+oc --token=$VIEWER_TOKEN create -f - <<EOF
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: test-vm
+  namespace: vm-security-lab
+spec:
+  running: false
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: test-vm
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        resources:
+          requests:
+            memory: 512Mi
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+EOF
+# This should fail with permission denied
+Task 2: Implement Network Policies to Isolate VM Traffic
+Network policies are essential for controlling traffic flow between virtual machines and other resources in your cluster.
+
+Subtask 2.1: Create Network Segmentation
+We'll create different network zones for VMs based on their security requirements.
+
+Create Namespace Labels for Network Segmentation
+# Label namespaces for network policy targeting
+oc label namespace vm-security-lab zone=secure
+oc create namespace vm-dmz
+oc label namespace vm-dmz zone=dmz
+oc create namespace vm-public
+oc label namespace vm-public zone=public
+Create a Secure Zone Network Policy
+This policy will isolate VMs in the secure zone:
+
+# secure-zone-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secure-zone-isolation
+  namespace: vm-security-lab
+spec:
+  podSelector:
+    matchLabels:
+      security-zone: secure
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          zone: secure
+    - podSelector:
+        matchLabels:
+          security-zone: secure
+    ports:
+    - protocol: TCP
+      port: 22
+    - protocol: TCP
+      port: 443
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          zone: secure
+    - podSelector:
+        matchLabels:
+          security-zone: secure
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+Apply the secure zone policy:
+
+oc apply -f secure-zone-policy.yaml
+Subtask 2.2: Create VM-Specific Network Policies
+Now let's create policies that specifically target virtual machine traffic.
+
+Create a Database VM Network Policy
+This policy restricts database VMs to only accept connections from application VMs:
+
+# database-vm-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: database-vm-policy
+  namespace: vm-security-lab
+spec:
+  podSelector:
+    matchLabels:
+      vm-type: database
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          vm-type: application
+    ports:
+    - protocol: TCP
+      port: 3306
+    - protocol: TCP
+      port: 5432
+  - from:
+    - podSelector:
+        matchLabels:
+          role: admin
+    ports:
+    - protocol: TCP
+      port: 22
+  egress:
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  - to:
+    - podSelector:
+        matchLabels:
+          vm-type: backup
+    ports:
+    - protocol: TCP
+      port: 22
+Apply the database VM policy:
+
+oc apply -f database-vm-policy.yaml
+Create a Web Server VM Network Policy
+This policy allows web servers to accept HTTP/HTTPS traffic from anywhere but restricts other access:
+
+# webserver-vm-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: webserver-vm-policy
+  namespace: vm-security-lab
+spec:
+  podSelector:
+    matchLabels:
+      vm-type: webserver
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+  - from:
+    - podSelector:
+        matchLabels:
+          role: admin
+    ports:
+    - protocol: TCP
+      port: 22
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          vm-type: database
+    ports:
+    - protocol: TCP
+      port: 3306
+    - protocol: TCP
+      port: 5432
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+Apply the web server policy:
+
+oc apply -f webserver-vm-policy.yaml
+Subtask 2.3: Create Test VMs with Network Policy Labels
+Let's create some test VMs to verify our network policies work correctly.
+
+Create a Database VM
+# database-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: database-vm
+  namespace: vm-security-lab
+  labels:
+    vm-type: database
+    security-zone: secure
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: database-vm
+        vm-type: database
+        security-zone: secure
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            packages:
+              - mysql-server
+            runcmd:
+              - systemctl enable mysqld
+              - systemctl start mysqld
+Apply the database VM:
+
+oc apply -f database-vm.yaml
+Create a Web Server VM
+# webserver-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: webserver-vm
+  namespace: vm-security-lab
+  labels:
+    vm-type: webserver
+    security-zone: secure
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: webserver-vm
+        vm-type: webserver
+        security-zone: secure
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            packages:
+              - httpd
+            runcmd:
+              - systemctl enable httpd
+              - systemctl start httpd
+              - echo "Web Server VM" > /var/www/html/index.html
+Apply the web server VM:
+
+oc apply -f webserver-vm.yaml
+Subtask 2.4: Test Network Policy Enforcement
+Let's verify that our network policies are working correctly.
+
+Check VM Status
+# Wait for VMs to be ready
+oc get vms -n vm-security-lab
+oc get vmis -n vm-security-lab
+
+# Get VM IP addresses
+oc get vmis -n vm-security-lab -o wide
+Test Network Connectivity
+# Create a test pod to check connectivity
+oc run network-test --image=busybox --rm -it --restart=Never -n vm-security-lab -- sh
+
+# Inside the test pod, try to connect to the database VM (should fail without proper labels)
+# Replace <DATABASE_VM_IP> with actual IP
+# nc -zv <DATABASE_VM_IP> 3306
+
+# Exit the test pod
+exit
+Test with Properly Labeled Pod
+# Create a test pod with application label
+oc run app-test --image=busybox --rm -it --restart=Never -n vm-security-lab --labels="vm-type=application" -- sh
+
+# Inside this pod, try to connect to database VM (should succeed)
+# nc -zv <DATABASE_VM_IP> 3306
+
+exit
+Task 3: Secure VM Storage Using Encryption and Access Controls
+Storage security is critical for protecting sensitive data in virtual machines. We'll implement encryption and access controls.
+
+Subtask 3.1: Create Encrypted Storage Classes
+First, let's create storage classes that support encryption.
+
+Create an Encrypted Storage Class
+# encrypted-storage-class.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: encrypted-ssd
+provisioner: kubernetes.io/no-provisioner
+parameters:
+  type: ssd
+  encrypted: "true"
+  fsType: ext4
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+Apply the encrypted storage class:
+
+oc apply -f encrypted-storage-class.yaml
+Create a Secure Storage Class with Access Controls
+# secure-storage-class.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: secure-storage
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "false"
+provisioner: kubernetes.io/no-provisioner
+parameters:
+  type: ssd
+  encrypted: "true"
+  fsType: ext4
+  accessModes: ReadWriteOnce
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: false
+reclaimPolicy: Retain
+mountOptions:
+  - noatime
+  - nodiratime
+Apply the secure storage class:
+
+oc apply -f secure-storage-class.yaml
+Subtask 3.2: Create Encrypted Persistent Volumes
+Now let's create encrypted persistent volumes for our VMs.
+
+Create an Encrypted PV for Database Storage
+# encrypted-database-pv.yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: encrypted-db-pv
+  labels:
+    type: encrypted
+    usage: database
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: encrypted-ssd
+  hostPath:
+    path: /mnt/encrypted-db-data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: kubernetes.io/hostname
+          operator: Exists
+Apply the encrypted database PV:
+
+oc apply -f encrypted-database-pv.yaml
+Create a PVC for the Database VM
+# database-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: database-storage
+  namespace: vm-security-lab
+  labels:
+    app: database-vm
+    security-level: high
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: encrypted-ssd
+  selector:
+    matchLabels:
+      type: encrypted
+      usage: database
+Apply the database PVC:
+
+oc apply -f database-pvc.yaml
+Subtask 3.3: Implement Storage Access Controls with Secrets
+We'll use Kubernetes secrets to manage encryption keys and access credentials.
+
+Create Encryption Key Secret
+# Generate a random encryption key
+ENCRYPTION_KEY=$(openssl rand -base64 32)
+
+# Create secret for encryption key
+oc create secret generic vm-encryption-key \
+  --from-literal=key="$ENCRYPTION_KEY" \
+  -n vm-security-lab
+
+# Label the secret for easy identification
+oc label secret vm-encryption-key security-level=high -n vm-security-lab
+Create Database Credentials Secret
+# Create database credentials
+oc create secret generic database-credentials \
+  --from-literal=username=dbadmin \
+  --from-literal=password=$(openssl rand -base64 16) \
+  --from-literal=root-password=$(openssl rand -base64 16) \
+  -n vm-security-lab
+
+# Label the secret
+oc label secret database-credentials app=database-vm -n vm-security-lab
+Create RBAC for Secret Access
+# secret-access-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: vm-security-lab
+  name: secret-reader
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["database-credentials", "vm-encryption-key"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: vm-secret-access
+  namespace: vm-security-lab
+subjects:
+- kind: ServiceAccount
+  name: vm-operator-sa
+  namespace: vm-security-lab
+- kind: ServiceAccount
+  name: vm-admin-sa
+  namespace: vm-security-lab
+roleRef:
+  kind: Role
+  name: secret-reader
+  apiGroup: rbac.authorization.k8s.io
+Apply the secret access RBAC:
+
+oc apply -f secret-access-rbac.yaml
+Subtask 3.4: Create Secure VM with Encrypted Storage
+Now let's create a VM that uses encrypted storage and secure credentials.
+
+Create a Secure Database VM
+# secure-database-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: secure-database-vm
+  namespace: vm-security-lab
+  labels:
+    vm-type: database
+    security-zone: secure
+    security-level: high
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: secure-database-vm
+        vm-type: database
+        security-zone: secure
+        security-level: high
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: encrypted-storage
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: 2
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+      - name: encrypted-storage
+        persistentVolumeClaim:
+          claimName: database-storage
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            packages:
+              - mysql-server
+              - cryptsetup
+            write_files:
+            - path: /etc/mysql/mysql.conf.d/security.cnf
+              content: |
+                [mysqld]
+                ssl-ca=/etc/mysql/ca-cert.pem
+                ssl-cert=/etc/mysql/server-cert.pem
+                ssl-key=/etc/mysql/server-key.pem
+                require_secure_transport=ON
+                validate_password.policy=STRONG
+            runcmd:
+              - systemctl enable mysqld
+              - systemctl start mysqld
+              - mkdir -p /encrypted-data
+              - mount /dev/vdb /encrypted-data
+              - chown mysql:mysql /encrypted-data
+              - mysql -e "CREATE USER 'dbadmin'@'%' IDENTIFIED BY 'SecurePass123!'"
+              - mysql -e "GRANT ALL PRIVILEGES ON *.* TO 'dbadmin'@'%' WITH GRANT OPTION"
+              - mysql -e "FLUSH PRIVILEGES"
+Apply the secure database VM:
+
+oc apply -f secure-database-vm.yaml
+Subtask 3.5: Implement Storage Monitoring and Auditing
+Let's set up monitoring for our encrypted storage.
+
+Create a Storage Monitor ConfigMap
+# storage-monitor-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-monitor-config
+  namespace: vm-security-lab
+data:
+  monitor.sh: |
+    #!/bin/bash
+    while true; do
+      echo "$(date): Checking storage access for VMs"
+      kubectl get pvc -n vm-security-lab -o wide
+      kubectl get events -n vm-security-lab --field-selector reason=VolumeMount
+      sleep 300
+    done
+  audit.sh: |
+    #!/bin/bash
+    echo "Storage Audit Report - $(date)"
+    echo "================================"
+    echo "Encrypted PVCs:"
+    kubectl get pvc -n vm-security-lab -l security-level=high
+    echo ""
+    echo "Secret Access:"
+    kubectl get rolebindings -n vm-security-lab -o wide
+    echo ""
+    echo "VM Storage Usage:"
+    kubectl get vmis -n vm-security-lab -o custom-columns=NAME:.metadata.name,VOLUMES:.spec.volumes[*].name
+Apply the storage monitor config:
+
+oc apply -f storage-monitor-config.yaml
+Create a Monitoring Pod
+# storage-monitor-pod.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: storage-monitor
+  namespace: vm-security-lab
+  labels:
+    app: storage-monitor
+spec:
+  serviceAccountName: vm-admin-sa
+  containers:
+  - name: monitor
+    image: bitnami/kubectl:latest
+    command: ["/bin/bash"]
+    args: ["/scripts/monitor.sh"]
+    volumeMounts:
+    - name: scripts
+      mountPath: /scripts
+  volumes:
+  - name: scripts
+    configMap:
+      name: storage-monitor-config
+      defaultMode: 0755
+  restartPolicy: Always
+Apply the monitoring pod:
+
+oc apply -f storage-monitor-pod.yaml
+Subtask 3.6: Test Storage Security
+Let's verify that our storage security measures are working correctly.
+
+Check PVC Status
+# Check if PVCs are bound and encrypted
+oc get pvc -n vm-security-lab
+oc describe pvc database-storage -n vm-security-lab
+Verify VM Storage Mount
+# Check if the secure database VM is running
+oc get vms secure-database-vm -n vm-security-lab
+oc get vmis secure-database-vm -n vm-security-lab
+
+# Check VM events for storage mounting
+oc describe vmi secure-database-vm -n vm-security-lab
+Test Secret Access
+# Test secret access with different service accounts
+OPERATOR_TOKEN=$(oc create token vm-operator-sa -n vm-security-lab --duration=10m)
+VIEWER_TOKEN=$(oc create token vm-viewer-sa -n vm-security-lab --duration=10m)
+
+# Operator should be able to access secrets
+oc --token=$OPERATOR_TOKEN get secret database-credentials -n vm-security-lab
+# This should work
+
+# Viewer should not be able to access secrets
+oc --token=$VIEWER_TOKEN get secret database-credentials -n vm-security-lab
+# This should fail
+Run Storage Audit
+# Run the audit script
+oc exec -it storage-monitor -n vm-security-lab -- /scripts/audit.sh
+Troubleshooting Tips
+Common RBAC Issues
+Permission Denied Errors: Check if the service account has the correct role bindings
+Token Expiration: Regenerate tokens if they expire during testing
+Namespace Issues: Ensure all resources are in the correct namespace
+# Debug RBAC issues
+oc auth can-i create vms --as=system:serviceaccount:vm-security-lab:vm-operator-sa -n vm-security-lab
+oc describe rolebinding vm-operator-binding -n vm-security-lab
+Network Policy Troubleshooting
+Connectivity Issues: Verify that pods have the correct labels
+Policy Not Applied: Check if the network plugin supports NetworkPolicies
+DNS Resolution: Ensure DNS egress rules are included
+# Debug network policies
+oc get networkpolicies -n vm-security-lab
+oc describe networkpolicy secure-zone-isolation -n vm-security-lab
+
+# Check pod labels
+oc get pods -n vm-security-lab --show-labels
+Storage Security Issues
+PVC Binding Problems: Check if PVs match PVC requirements
+Mount Failures: Verify storage class and node capabilities
+Secret Access: Ensure proper RBAC for secret access
+# Debug storage issues
+oc get pv,pvc -n vm-security-lab
+oc describe pvc database-storage -n vm-security-lab
+oc get events -n vm-security-lab --field-selector reason=FailedMount
+Conclusion
+In this comprehensive lab, you have successfully implemented multiple layers of security for virtual machines in OpenShift Virtualization:
+
+What You Accomplished:
+
+RBAC Implementation: You created granular role-based access controls with three distinct permission levels (viewer, operator, administrator), ensuring that users only have the minimum necessary permissions for their roles.
+
+Network Security: You implemented network policies that isolate VM traffic based on security zones and VM types, creating a secure network architecture that prevents unauthorized communication between VMs.
+
+Storage Security: You configured encrypted storage classes, implemented secure persistent volume management, and created proper access controls for sensitive data storage.
+
+Why This Matters:
+
+Defense in Depth: By implementing multiple security layers, you've created a robust security posture that protects against various attack vectors
+Compliance: These security measures help meet regulatory requirements for data protection and access control
+Operational Security: The RBAC system ensures that team members can only perform actions appropriate to their roles, reducing the risk of accidental or malicious changes
+Data Protection: Encrypted storage and proper access controls protect sensitive data both at rest and in transit
+Real-World Applications:
+
+These security practices are essential for:
+
+Enterprise Environments: Where multiple teams need different levels of access to VM resources
+Regulated Industries: Such as healthcare, finance, and government, where data protection is critical
+Multi-Tenant Environments: Where isolation between different customers or departments is required
+DevOps Pipelines: Where automated systems need specific, limited permissions to manage VMs
+The skills you've developed in this lab form the foundation for managing secure, enterprise-grade virtual machine environments in modern containerized infrastructures. These practices ensure that your VM deployments are not only functional but also secure, compliant, and maintainable.

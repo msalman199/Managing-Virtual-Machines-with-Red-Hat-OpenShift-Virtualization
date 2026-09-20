@@ -1,0 +1,40 @@
+# secure-zone-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: secure-zone-isolation
+  namespace: vm-security-lab
+spec:
+  podSelector:
+    matchLabels:
+      security-zone: secure
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          zone: secure
+    - podSelector:
+        matchLabels:
+          security-zone: secure
+    ports:
+    - protocol: TCP
+      port: 22
+    - protocol: TCP
+      port: 443
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          zone: secure
+    - podSelector:
+        matchLabels:
+          security-zone: secure
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53

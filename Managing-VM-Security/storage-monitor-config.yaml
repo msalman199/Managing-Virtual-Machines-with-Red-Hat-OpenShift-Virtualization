@@ -1,0 +1,27 @@
+# storage-monitor-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-monitor-config
+  namespace: vm-security-lab
+data:
+  monitor.sh: |
+    #!/bin/bash
+    while true; do
+      echo "$(date): Checking storage access for VMs"
+      kubectl get pvc -n vm-security-lab -o wide
+      kubectl get events -n vm-security-lab --field-selector reason=VolumeMount
+      sleep 300
+    done
+  audit.sh: |
+    #!/bin/bash
+    echo "Storage Audit Report - $(date)"
+    echo "================================"
+    echo "Encrypted PVCs:"
+    kubectl get pvc -n vm-security-lab -l security-level=high
+    echo ""
+    echo "Secret Access:"
+    kubectl get rolebindings -n vm-security-lab -o wide
+    echo ""
+    echo "VM Storage Usage:"
+    kubectl get vmis -n vm-security-lab -o custom-columns=NAME:.metadata.name,VOLUMES:.spec.volumes[*].name

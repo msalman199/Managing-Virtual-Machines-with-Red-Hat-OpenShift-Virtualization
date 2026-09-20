@@ -1,0 +1,53 @@
+# webserver-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: webserver-vm
+  namespace: vm-security-lab
+  labels:
+    vm-type: webserver
+    security-zone: secure
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: webserver-vm
+        vm-type: webserver
+        security-zone: secure
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/fedora-cloud-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            packages:
+              - httpd
+            runcmd:
+              - systemctl enable httpd
+              - systemctl start httpd
+              - echo "Web Server VM" > /var/www/html/index.html

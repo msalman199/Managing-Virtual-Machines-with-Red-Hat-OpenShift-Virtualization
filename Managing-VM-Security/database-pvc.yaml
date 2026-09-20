@@ -1,0 +1,20 @@
+# database-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: database-storage
+  namespace: vm-security-lab
+  labels:
+    app: database-vm
+    security-level: high
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: encrypted-ssd
+  selector:
+    matchLabels:
+      type: encrypted
+      usage: database

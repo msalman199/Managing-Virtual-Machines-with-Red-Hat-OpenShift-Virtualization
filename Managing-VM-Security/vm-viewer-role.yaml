@@ -1,0 +1,16 @@
+# vm-viewer-role.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: vm-security-lab
+  name: vm-viewer
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines", "virtualmachineinstances"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods", "services"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["subresources.kubevirt.io"]
+  resources: ["virtualmachines/console"]
+  verbs: ["get"]
