@@ -1,0 +1,903 @@
+Lab 9: Managing Virtual Machine Templates
+Objectives
+By the end of this lab, you will be able to:
+
+• Create custom VM templates using YAML configuration files for standardized virtual machine deployment • Provision virtual machines from pre-defined templates using OpenShift Virtualization • Modify and customize templates to accommodate different VM configurations and requirements • Understand template inheritance and how to create variations for different use cases • Implement best practices for VM template management in enterprise environments
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic understanding of YAML syntax and structure • Familiarity with Linux command line operations • Knowledge of virtual machine concepts such as CPU, memory, and storage allocation • Basic understanding of Kubernetes resources and object definitions • Access to OpenShift cluster with virtualization capabilities enabled
+
+Required Knowledge Areas
+• Understanding of virtualization fundamentals • Basic familiarity with container orchestration concepts • Knowledge of text editors like vi/vim or nano • Understanding of networking basics for VM connectivity
+
+Lab Environment Setup
+Al Nafi Cloud Environment: This lab uses Al Nafi's pre-configured Linux-based cloud machines. Simply click Start Lab to access your ready-to-use environment with OpenShift Virtualization already installed and configured. No additional VM setup required.
+
+Environment Details
+• Operating System: Red Hat Enterprise Linux 9 • OpenShift Version: 4.12 or later • Virtualization Operator: Pre-installed and configured • Storage: Dynamic provisioning enabled • Network: Default pod network configured
+
+Task 1: Create a Custom VM Template Using YAML
+Subtask 1.1: Understanding VM Template Structure
+Before creating templates, let's understand the basic structure of a VM template in OpenShift Virtualization.
+
+Key Components of a VM Template:
+
+• Template metadata - Name, labels, and annotations • VM specification - CPU, memory, and disk requirements • Operating system information - Boot source and OS type • Network configuration - Network interfaces and connectivity • Storage configuration - Disk types and sizes
+
+Subtask 1.2: Create the Base Template Directory
+First, create a dedicated directory for your VM templates:
+
+mkdir -p ~/vm-templates
+cd ~/vm-templates
+Subtask 1.3: Create a Basic Ubuntu VM Template
+Create your first VM template for Ubuntu virtual machines:
+
+cat > ubuntu-basic-template.yaml << 'EOF'
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: ubuntu-basic-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    os.template.kubevirt.io/ubuntu20.04: "true"
+  annotations:
+    name.os.template.kubevirt.io/ubuntu20.04: Ubuntu 20.04 LTS
+    description: Template for creating Ubuntu 20.04 virtual machines
+    tags: ubuntu,vm,linux
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      os.template.kubevirt.io/ubuntu20.04: "true"
+  spec:
+    running: false
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+          memory:
+            guest: ${MEMORY}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/kubevirt/ubuntu-container-disk:20.04
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: ubuntu
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "2"
+- name: MEMORY
+  description: Amount of memory
+  value: 2Gi
+- name: USER_PASSWORD
+  description: Password for ubuntu user
+  generate: expression
+  from: '[a-zA-Z0-9]{12}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for ubuntu user
+  value: ""
+EOF
+Subtask 1.4: Create an Advanced CentOS Template
+Now create a more advanced template for CentOS with additional customization options:
+
+cat > centos-advanced-template.yaml << 'EOF'
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: centos-advanced-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    os.template.kubevirt.io/centos8: "true"
+  annotations:
+    name.os.template.kubevirt.io/centos8: CentOS Stream 8
+    description: Advanced template for CentOS Stream 8 virtual machines
+    tags: centos,vm,linux,advanced
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      environment: ${ENVIRONMENT}
+      os.template.kubevirt.io/centos8: "true"
+  spec:
+    running: ${{START_VM}}
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+            threads: ${{CPU_THREADS}}
+          memory:
+            guest: ${MEMORY}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: datadisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/kubevirt/centos-container-disk:8-stream
+        - name: datadisk
+          emptyDisk:
+            capacity: ${DATA_DISK_SIZE}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: centos
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+                - htop
+                - git
+                - curl
+                - wget
+              write_files:
+              - path: /etc/motd
+                content: |
+                  Welcome to ${VM_NAME}
+                  Environment: ${ENVIRONMENT}
+                  Created from template: centos-advanced-vm-template
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+                - mkfs.ext4 /dev/vdb
+                - mkdir -p /data
+                - mount /dev/vdb /data
+                - echo '/dev/vdb /data ext4 defaults 0 0' >> /etc/fstab
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: ENVIRONMENT
+  description: Environment label (dev/test/prod)
+  value: dev
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "2"
+- name: CPU_THREADS
+  description: Number of CPU threads per core
+  value: "1"
+- name: MEMORY
+  description: Amount of memory
+  value: 4Gi
+- name: DATA_DISK_SIZE
+  description: Size of additional data disk
+  value: 10Gi
+- name: START_VM
+  description: Start VM after creation
+  value: "false"
+- name: USER_PASSWORD
+  description: Password for centos user
+  generate: expression
+  from: '[a-zA-Z0-9]{16}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for centos user
+  value: ""
+EOF
+Subtask 1.5: Apply Templates to OpenShift
+Apply both templates to your OpenShift cluster:
+
+# Apply the Ubuntu template
+oc apply -f ubuntu-basic-template.yaml
+
+# Apply the CentOS template
+oc apply -f centos-advanced-template.yaml
+
+# Verify templates are created
+oc get templates
+Expected output:
+
+NAME                        DESCRIPTION                                    PARAMETERS    OBJECTS
+centos-advanced-vm-template Advanced template for CentOS Stream 8 virt... 8 (1 blank)   1
+ubuntu-basic-vm-template    Template for creating Ubuntu 20.04 virtua...  5 (1 blank)   1
+Task 2: Provision a VM from the Template
+Subtask 2.1: Generate SSH Key Pair
+First, generate an SSH key pair for secure access to your VMs:
+
+# Generate SSH key pair
+ssh-keygen -t rsa -b 4096 -f ~/.ssh/vm-lab-key -N ""
+
+# Display the public key
+cat ~/.ssh/vm-lab-key.pub
+Note: Copy the public key output as you'll need it for VM provisioning.
+
+Subtask 2.2: Provision Ubuntu VM from Template
+Create your first VM using the Ubuntu template:
+
+# Set your SSH public key as a variable
+export SSH_PUB_KEY="$(cat ~/.ssh/vm-lab-key.pub)"
+
+# Process the template and create the VM
+oc process ubuntu-basic-vm-template \
+  -p VM_NAME=ubuntu-web-server \
+  -p CPU_CORES=2 \
+  -p MEMORY=2Gi \
+  -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+  | oc apply -f -
+Subtask 2.3: Provision CentOS VM from Template
+Create a CentOS VM using the advanced template:
+
+# Process the CentOS template with custom parameters
+oc process centos-advanced-vm-template \
+  -p VM_NAME=centos-database-server \
+  -p ENVIRONMENT=development \
+  -p CPU_CORES=4 \
+  -p MEMORY=8Gi \
+  -p DATA_DISK_SIZE=20Gi \
+  -p START_VM=true \
+  -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+  | oc apply -f -
+Subtask 2.4: Verify VM Creation
+Check the status of your newly created VMs:
+
+# List all VMs
+oc get vms
+
+# Check VM details
+oc describe vm ubuntu-web-server
+oc describe vm centos-database-server
+
+# Check if VMs are running
+oc get vmis
+Subtask 2.5: Start the Ubuntu VM
+Start the Ubuntu VM manually:
+
+# Start the Ubuntu VM
+oc patch vm ubuntu-web-server --type merge -p '{"spec":{"running":true}}'
+
+# Monitor the startup process
+oc get vmi ubuntu-web-server -w
+Task 3: Modify the Template to Suit Different VM Configurations
+Subtask 3.1: Create a Development Environment Template
+Create a specialized template for development environments:
+
+cat > development-vm-template.yaml << 'EOF'
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: development-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    environment: development
+  annotations:
+    description: Template optimized for development environments
+    tags: development,vm,tools
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      environment: development
+      team: ${TEAM_NAME}
+  spec:
+    running: ${{START_VM}}
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+          memory:
+            guest: ${MEMORY}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: projectsdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: ${BASE_IMAGE}
+        - name: projectsdisk
+          emptyDisk:
+            capacity: ${PROJECTS_DISK_SIZE}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: ${VM_USER}
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+                - git
+                - curl
+                - wget
+                - vim
+                - htop
+                - docker.io
+                - nodejs
+                - npm
+                - python3
+                - python3-pip
+              groups:
+                - docker
+              users:
+                - name: ${VM_USER}
+                  groups: docker
+                  shell: /bin/bash
+              write_files:
+              - path: /home/${VM_USER}/.bashrc
+                append: true
+                content: |
+                  # Development environment aliases
+                  alias ll='ls -la'
+                  alias gs='git status'
+                  alias gp='git pull'
+                  export PROJECTS_DIR=/projects
+              - path: /etc/motd
+                content: |
+                  Development Environment: ${VM_NAME}
+                  Team: ${TEAM_NAME}
+                  Projects Directory: /projects
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+                - systemctl enable docker
+                - systemctl start docker
+                - mkfs.ext4 /dev/vdb
+                - mkdir -p /projects
+                - mount /dev/vdb /projects
+                - echo '/dev/vdb /projects ext4 defaults 0 0' >> /etc/fstab
+                - chown ${VM_USER}:${VM_USER} /projects
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: TEAM_NAME
+  description: Development team name
+  value: dev-team
+- name: VM_USER
+  description: Primary user for the VM
+  value: developer
+- name: BASE_IMAGE
+  description: Base container disk image
+  value: quay.io/kubevirt/ubuntu-container-disk:20.04
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "4"
+- name: MEMORY
+  description: Amount of memory
+  value: 8Gi
+- name: PROJECTS_DISK_SIZE
+  description: Size of projects disk
+  value: 50Gi
+- name: START_VM
+  description: Start VM after creation
+  value: "true"
+- name: USER_PASSWORD
+  description: Password for the VM user
+  generate: expression
+  from: '[a-zA-Z0-9]{16}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for the VM user
+  value: ""
+EOF
+Subtask 3.2: Create a Production Environment Template
+Create a template optimized for production workloads:
+
+cat > production-vm-template.yaml << 'EOF'
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: production-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    environment: production
+  annotations:
+    description: Template optimized for production environments
+    tags: production,vm,enterprise
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      environment: production
+      tier: ${SERVICE_TIER}
+    annotations:
+      backup.policy: ${BACKUP_POLICY}
+      monitoring.enabled: "true"
+  spec:
+    running: ${{START_VM}}
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+            dedicatedCpuPlacement: ${{DEDICATED_CPU}}
+          memory:
+            guest: ${MEMORY}
+            hugepages:
+              pageSize: ${HUGEPAGE_SIZE}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: datadisk
+              disk:
+                bus: virtio
+            - name: logsdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: ${BASE_IMAGE}
+        - name: datadisk
+          emptyDisk:
+            capacity: ${DATA_DISK_SIZE}
+        - name: logsdisk
+          emptyDisk:
+            capacity: ${LOGS_DISK_SIZE}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: ${VM_USER}
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+                - rsyslog
+                - logrotate
+                - chrony
+                - fail2ban
+                - aide
+              write_files:
+              - path: /etc/motd
+                content: |
+                  PRODUCTION ENVIRONMENT: ${VM_NAME}
+                  Service Tier: ${SERVICE_TIER}
+                  Backup Policy: ${BACKUP_POLICY}
+                  
+                  WARNING: This is a production system.
+                  All activities are logged and monitored.
+              - path: /etc/rsyslog.d/50-production.conf
+                content: |
+                  # Production logging configuration
+                  *.info;mail.none;authpriv.none;cron.none /var/log/messages
+                  authpriv.* /var/log/secure
+                  mail.* /var/log/maillog
+                  cron.* /var/log/cron
+                  *.emerg :omusrmsg:*
+                  uucp,news.crit /var/log/spooler
+                  local7.* /var/log/boot.log
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+                - systemctl enable chronyd
+                - systemctl start chronyd
+                - systemctl enable fail2ban
+                - systemctl start fail2ban
+                - mkfs.ext4 /dev/vdb
+                - mkfs.ext4 /dev/vdc
+                - mkdir -p /data /var/log/applications
+                - mount /dev/vdb /data
+                - mount /dev/vdc /var/log/applications
+                - echo '/dev/vdb /data ext4 defaults 0 0' >> /etc/fstab
+                - echo '/dev/vdc /var/log/applications ext4 defaults 0 0' >> /etc/fstab
+                - aide --init
+                - mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: SERVICE_TIER
+  description: Service tier (frontend/backend/database)
+  value: backend
+- name: VM_USER
+  description: Primary user for the VM
+  value: admin
+- name: BASE_IMAGE
+  description: Base container disk image
+  value: quay.io/kubevirt/centos-container-disk:8-stream
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "8"
+- name: DEDICATED_CPU
+  description: Use dedicated CPU placement
+  value: "false"
+- name: MEMORY
+  description: Amount of memory
+  value: 16Gi
+- name: HUGEPAGE_SIZE
+  description: Hugepage size (2Mi or 1Gi)
+  value: 2Mi
+- name: DATA_DISK_SIZE
+  description: Size of data disk
+  value: 100Gi
+- name: LOGS_DISK_SIZE
+  description: Size of logs disk
+  value: 50Gi
+- name: BACKUP_POLICY
+  description: Backup policy name
+  value: daily-backup
+- name: START_VM
+  description: Start VM after creation
+  value: "false"
+- name: USER_PASSWORD
+  description: Password for the VM user
+  generate: expression
+  from: '[a-zA-Z0-9]{20}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for the VM user
+  value: ""
+EOF
+Subtask 3.3: Apply the New Templates
+Apply the new specialized templates:
+
+# Apply development template
+oc apply -f development-vm-template.yaml
+
+# Apply production template
+oc apply -f production-vm-template.yaml
+
+# Verify all templates
+oc get templates
+Subtask 3.4: Test the Development Template
+Create a development VM using the new template:
+
+# Create a development VM
+oc process development-vm-template \
+  -p VM_NAME=dev-workstation-01 \
+  -p TEAM_NAME=frontend-team \
+  -p VM_USER=developer \
+  -p CPU_CORES=4 \
+  -p MEMORY=8Gi \
+  -p PROJECTS_DISK_SIZE=100Gi \
+  -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+  | oc apply -f -
+
+# Monitor the VM creation
+oc get vm dev-workstation-01 -w
+Subtask 3.5: Test the Production Template
+Create a production VM using the production template:
+
+# Create a production VM
+oc process production-vm-template \
+  -p VM_NAME=prod-api-server-01 \
+  -p SERVICE_TIER=backend \
+  -p VM_USER=sysadmin \
+  -p CPU_CORES=8 \
+  -p MEMORY=32Gi \
+  -p DATA_DISK_SIZE=200Gi \
+  -p LOGS_DISK_SIZE=100Gi \
+  -p BACKUP_POLICY=critical-daily \
+  -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+  | oc apply -f -
+
+# Check the VM status
+oc get vm prod-api-server-01
+Subtask 3.6: Create Template Variations
+Create a parameter file for easy template customization:
+
+cat > vm-configs.env << 'EOF'
+# Development Environment Configuration
+DEV_CPU_CORES=4
+DEV_MEMORY=8Gi
+DEV_PROJECTS_DISK=100Gi
+
+# Testing Environment Configuration
+TEST_CPU_CORES=2
+TEST_MEMORY=4Gi
+TEST_PROJECTS_DISK=50Gi
+
+# Production Environment Configuration
+PROD_CPU_CORES=16
+PROD_MEMORY=64Gi
+PROD_DATA_DISK=500Gi
+PROD_LOGS_DISK=200Gi
+EOF
+Create a script to deploy VMs with different configurations:
+
+cat > deploy-vm.sh << 'EOF'
+#!/bin/bash
+
+# Load configuration
+source vm-configs.env
+
+TEMPLATE_NAME=$1
+VM_NAME=$2
+ENVIRONMENT=$3
+
+if [ -z "$TEMPLATE_NAME" ] || [ -z "$VM_NAME" ] || [ -z "$ENVIRONMENT" ]; then
+    echo "Usage: $0 <template-name> <vm-name> <environment>"
+    echo "Environments: dev, test, prod"
+    exit 1
+fi
+
+# Set SSH public key
+SSH_PUB_KEY="$(cat ~/.ssh/vm-lab-key.pub)"
+
+case $ENVIRONMENT in
+    "dev")
+        oc process $TEMPLATE_NAME \
+          -p VM_NAME=$VM_NAME \
+          -p CPU_CORES=$DEV_CPU_CORES \
+          -p MEMORY=$DEV_MEMORY \
+          -p PROJECTS_DISK_SIZE=$DEV_PROJECTS_DISK \
+          -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+          | oc apply -f -
+        ;;
+    "test")
+        oc process $TEMPLATE_NAME \
+          -p VM_NAME=$VM_NAME \
+          -p CPU_CORES=$TEST_CPU_CORES \
+          -p MEMORY=$TEST_MEMORY \
+          -p PROJECTS_DISK_SIZE=$TEST_PROJECTS_DISK \
+          -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+          | oc apply -f -
+        ;;
+    "prod")
+        oc process production-vm-template \
+          -p VM_NAME=$VM_NAME \
+          -p CPU_CORES=$PROD_CPU_CORES \
+          -p MEMORY=$PROD_MEMORY \
+          -p DATA_DISK_SIZE=$PROD_DATA_DISK \
+          -p LOGS_DISK_SIZE=$PROD_LOGS_DISK \
+          -p SSH_PUBLIC_KEY="$SSH_PUB_KEY" \
+          | oc apply -f -
+        ;;
+    *)
+        echo "Invalid environment: $ENVIRONMENT"
+        exit 1
+        ;;
+esac
+
+echo "VM $VM_NAME deployed for $ENVIRONMENT environment"
+EOF
+
+chmod +x deploy-vm.sh
+Subtask 3.7: Test the Deployment Script
+Use the script to deploy VMs with different configurations:
+
+# Deploy a development VM
+./deploy-vm.sh development-vm-template dev-frontend-01 dev
+
+# Deploy a test VM
+./deploy-vm.sh development-vm-template test-backend-01 test
+
+# Deploy a production VM
+./deploy-vm.sh production-vm-template prod-database-01 prod
+
+# Verify all VMs
+oc get vms
+Verification and Testing
+Verify Template Functionality
+Check that all templates are working correctly:
+
+# List all templates
+oc get templates -o custom-columns=NAME:.metadata.name,DESCRIPTION:.metadata.annotations.description
+
+# Check template parameters
+oc describe template ubuntu-basic-vm-template
+oc describe template development-vm-template
+oc describe template production-vm-template
+
+# Verify VMs created from templates
+oc get vms -o custom-columns=NAME:.metadata.name,STATUS:.status.printableStatus,TEMPLATE:.metadata.labels
+Access VM Consoles
+Connect to your VMs to verify they're working:
+
+# Access VM console (replace VM_NAME with actual VM name)
+oc console ubuntu-web-server
+
+# Or use VNC viewer
+oc get vmi ubuntu-web-server -o jsonpath='{.status.interfaces[0].ipAddress}'
+SSH Access Testing
+Test SSH access to your VMs:
+
+# Get VM IP address
+VM_IP=$(oc get vmi ubuntu-web-server -o jsonpath='{.status.interfaces[0].ipAddress}')
+
+# SSH to the VM
+ssh -i ~/.ssh/vm-lab-key ubuntu@$VM_IP
+Troubleshooting Common Issues
+Template Application Errors
+Issue: Template parameters not being processed correctly
+
+Solution:
+
+# Validate template syntax
+oc process --dry-run ubuntu-basic-vm-template -p VM_NAME=test-vm
+
+# Check for missing required parameters
+oc process ubuntu-basic-vm-template --parameters
+VM Creation Failures
+Issue: VM fails to start or create
+
+Solution:
+
+# Check VM events
+oc describe vm <vm-name>
+
+# Check VMI status
+oc get vmi <vm-name> -o yaml
+
+# Check pod logs
+oc logs -l kubevirt.io/domain=<vm-name>
+Storage Issues
+Issue: Disk provisioning failures
+
+Solution:
+
+# Check storage classes
+oc get storageclass
+
+# Verify PVC creation
+oc get pvc
+
+# Check available storage
+oc describe nodes | grep -A5 "Allocated resources"
+Network Connectivity Problems
+Issue: Cannot access VM or VM cannot reach external networks
+
+Solution:
+
+# Check network policies
+oc get networkpolicy
+
+# Verify service mesh configuration
+oc get pods -n istio-system
+
+# Test pod network connectivity
+oc run test-pod --image=busybox --rm -it -- /bin/sh
+Best Practices for VM Template Management
+Template Organization
+• Use descriptive names that indicate the purpose and OS type • Implement consistent labeling for easy filtering and management • Version your templates using annotations or separate template names • Document template parameters thoroughly in descriptions
+
+Security Considerations
+• Use strong password generation for default user accounts • Implement SSH key-based authentication by default • Configure appropriate resource limits to prevent resource exhaustion • Include security tools like fail2ban in production templates
+
+Resource Management
+• Set appropriate CPU and memory defaults for different use cases • Use resource quotas to prevent overconsumption • Implement disk size limits based on environment requirements • Consider NUMA topology for high-performance workloads
+
+Maintenance and Updates
+• Regularly update base images to include security patches • Test template changes in development environments first • Maintain template documentation and change logs • Implement automated testing for template validation
+
+Conclusion
+In this comprehensive lab, you have successfully accomplished the following key objectives:
+
+What You Learned
+• Created custom VM templates using YAML configuration files that define standardized virtual machine specifications including CPU, memory, storage, and network configurations
+
+• Provisioned virtual machines from pre-defined templates using OpenShift Virtualization, demonstrating how templates streamline VM deployment and ensure consistency across environments
+
+• Modified and customized templates to accommodate different use cases, creating specialized templates for development, testing, and production environments with appropriate resource allocations and software configurations
+
+• Implemented template parameterization allowing for flexible VM deployment with customizable values for names, resources, and environment-specific settings
+
+• Developed deployment automation through scripts that utilize different template configurations based on environment requirements
+
+Why This Matters
+Enterprise Standardization: VM templates ensure consistent deployments across your organization, reducing configuration drift and improving reliability. This standardization is crucial for maintaining security policies, compliance requirements, and operational procedures.
+
+Operational Efficiency: Templates significantly reduce the time and effort required to deploy new virtual machines. Instead of manually configuring each VM, administrators can deploy standardized environments with a single command,

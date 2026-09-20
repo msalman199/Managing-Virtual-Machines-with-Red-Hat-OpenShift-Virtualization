@@ -1,0 +1,122 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: centos-advanced-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    os.template.kubevirt.io/centos8: "true"
+  annotations:
+    name.os.template.kubevirt.io/centos8: CentOS Stream 8
+    description: Advanced template for CentOS Stream 8 virtual machines
+    tags: centos,vm,linux,advanced
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      environment: ${ENVIRONMENT}
+      os.template.kubevirt.io/centos8: "true"
+  spec:
+    running: ${{START_VM}}
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+            threads: ${{CPU_THREADS}}
+          memory:
+            guest: ${MEMORY}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: datadisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/kubevirt/centos-container-disk:8-stream
+        - name: datadisk
+          emptyDisk:
+            capacity: ${DATA_DISK_SIZE}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: centos
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+                - htop
+                - git
+                - curl
+                - wget
+              write_files:
+              - path: /etc/motd
+                content: |
+                  Welcome to ${VM_NAME}
+                  Environment: ${ENVIRONMENT}
+                  Created from template: centos-advanced-vm-template
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+                - mkfs.ext4 /dev/vdb
+                - mkdir -p /data
+                - mount /dev/vdb /data
+                - echo '/dev/vdb /data ext4 defaults 0 0' >> /etc/fstab
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: ENVIRONMENT
+  description: Environment label (dev/test/prod)
+  value: dev
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "2"
+- name: CPU_THREADS
+  description: Number of CPU threads per core
+  value: "1"
+- name: MEMORY
+  description: Amount of memory
+  value: 4Gi
+- name: DATA_DISK_SIZE
+  description: Size of additional data disk
+  value: 10Gi
+- name: START_VM
+  description: Start VM after creation
+  value: "false"
+- name: USER_PASSWORD
+  description: Password for centos user
+  generate: expression
+  from: '[a-zA-Z0-9]{16}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for centos user
+  value: ""

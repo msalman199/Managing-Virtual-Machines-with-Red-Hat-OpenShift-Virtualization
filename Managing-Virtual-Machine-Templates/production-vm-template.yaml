@@ -1,0 +1,170 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: production-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    environment: production
+  annotations:
+    description: Template optimized for production environments
+    tags: production,vm,enterprise
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      environment: production
+      tier: ${SERVICE_TIER}
+    annotations:
+      backup.policy: ${BACKUP_POLICY}
+      monitoring.enabled: "true"
+  spec:
+    running: ${{START_VM}}
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+            dedicatedCpuPlacement: ${{DEDICATED_CPU}}
+          memory:
+            guest: ${MEMORY}
+            hugepages:
+              pageSize: ${HUGEPAGE_SIZE}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: datadisk
+              disk:
+                bus: virtio
+            - name: logsdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: ${BASE_IMAGE}
+        - name: datadisk
+          emptyDisk:
+            capacity: ${DATA_DISK_SIZE}
+        - name: logsdisk
+          emptyDisk:
+            capacity: ${LOGS_DISK_SIZE}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: ${VM_USER}
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+                - rsyslog
+                - logrotate
+                - chrony
+                - fail2ban
+                - aide
+              write_files:
+              - path: /etc/motd
+                content: |
+                  PRODUCTION ENVIRONMENT: ${VM_NAME}
+                  Service Tier: ${SERVICE_TIER}
+                  Backup Policy: ${BACKUP_POLICY}
+                  
+                  WARNING: This is a production system.
+                  All activities are logged and monitored.
+              - path: /etc/rsyslog.d/50-production.conf
+                content: |
+                  # Production logging configuration
+                  *.info;mail.none;authpriv.none;cron.none /var/log/messages
+                  authpriv.* /var/log/secure
+                  mail.* /var/log/maillog
+                  cron.* /var/log/cron
+                  *.emerg :omusrmsg:*
+                  uucp,news.crit /var/log/spooler
+                  local7.* /var/log/boot.log
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+                - systemctl enable chronyd
+                - systemctl start chronyd
+                - systemctl enable fail2ban
+                - systemctl start fail2ban
+                - mkfs.ext4 /dev/vdb
+                - mkfs.ext4 /dev/vdc
+                - mkdir -p /data /var/log/applications
+                - mount /dev/vdb /data
+                - mount /dev/vdc /var/log/applications
+                - echo '/dev/vdb /data ext4 defaults 0 0' >> /etc/fstab
+                - echo '/dev/vdc /var/log/applications ext4 defaults 0 0' >> /etc/fstab
+                - aide --init
+                - mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: SERVICE_TIER
+  description: Service tier (frontend/backend/database)
+  value: backend
+- name: VM_USER
+  description: Primary user for the VM
+  value: admin
+- name: BASE_IMAGE
+  description: Base container disk image
+  value: quay.io/kubevirt/centos-container-disk:8-stream
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "8"
+- name: DEDICATED_CPU
+  description: Use dedicated CPU placement
+  value: "false"
+- name: MEMORY
+  description: Amount of memory
+  value: 16Gi
+- name: HUGEPAGE_SIZE
+  description: Hugepage size (2Mi or 1Gi)
+  value: 2Mi
+- name: DATA_DISK_SIZE
+  description: Size of data disk
+  value: 100Gi
+- name: LOGS_DISK_SIZE
+  description: Size of logs disk
+  value: 50Gi
+- name: BACKUP_POLICY
+  description: Backup policy name
+  value: daily-backup
+- name: START_VM
+  description: Start VM after creation
+  value: "false"
+- name: USER_PASSWORD
+  description: Password for the VM user
+  generate: expression
+  from: '[a-zA-Z0-9]{20}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for the VM user
+  value: ""

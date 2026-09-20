@@ -1,0 +1,146 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: development-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    environment: development
+  annotations:
+    description: Template optimized for development environments
+    tags: development,vm,tools
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      environment: development
+      team: ${TEAM_NAME}
+  spec:
+    running: ${{START_VM}}
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+          memory:
+            guest: ${MEMORY}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: projectsdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: ${BASE_IMAGE}
+        - name: projectsdisk
+          emptyDisk:
+            capacity: ${PROJECTS_DISK_SIZE}
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: ${VM_USER}
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+                - git
+                - curl
+                - wget
+                - vim
+                - htop
+                - docker.io
+                - nodejs
+                - npm
+                - python3
+                - python3-pip
+              groups:
+                - docker
+              users:
+                - name: ${VM_USER}
+                  groups: docker
+                  shell: /bin/bash
+              write_files:
+              - path: /home/${VM_USER}/.bashrc
+                append: true
+                content: |
+                  # Development environment aliases
+                  alias ll='ls -la'
+                  alias gs='git status'
+                  alias gp='git pull'
+                  export PROJECTS_DIR=/projects
+              - path: /etc/motd
+                content: |
+                  Development Environment: ${VM_NAME}
+                  Team: ${TEAM_NAME}
+                  Projects Directory: /projects
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+                - systemctl enable docker
+                - systemctl start docker
+                - mkfs.ext4 /dev/vdb
+                - mkdir -p /projects
+                - mount /dev/vdb /projects
+                - echo '/dev/vdb /projects ext4 defaults 0 0' >> /etc/fstab
+                - chown ${VM_USER}:${VM_USER} /projects
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: TEAM_NAME
+  description: Development team name
+  value: dev-team
+- name: VM_USER
+  description: Primary user for the VM
+  value: developer
+- name: BASE_IMAGE
+  description: Base container disk image
+  value: quay.io/kubevirt/ubuntu-container-disk:20.04
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "4"
+- name: MEMORY
+  description: Amount of memory
+  value: 8Gi
+- name: PROJECTS_DISK_SIZE
+  description: Size of projects disk
+  value: 50Gi
+- name: START_VM
+  description: Start VM after creation
+  value: "true"
+- name: USER_PASSWORD
+  description: Password for the VM user
+  generate: expression
+  from: '[a-zA-Z0-9]{16}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for the VM user
+  value: ""

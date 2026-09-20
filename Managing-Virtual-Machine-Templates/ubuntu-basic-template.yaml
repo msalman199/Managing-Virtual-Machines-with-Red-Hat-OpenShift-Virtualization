@@ -1,0 +1,88 @@
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: ubuntu-basic-vm-template
+  namespace: default
+  labels:
+    template.kubevirt.io/type: vm
+    os.template.kubevirt.io/ubuntu20.04: "true"
+  annotations:
+    name.os.template.kubevirt.io/ubuntu20.04: Ubuntu 20.04 LTS
+    description: Template for creating Ubuntu 20.04 virtual machines
+    tags: ubuntu,vm,linux
+objects:
+- apiVersion: kubevirt.io/v1
+  kind: VirtualMachine
+  metadata:
+    name: ${VM_NAME}
+    namespace: ${NAMESPACE}
+    labels:
+      app: ${VM_NAME}
+      os.template.kubevirt.io/ubuntu20.04: "true"
+  spec:
+    running: false
+    template:
+      metadata:
+        labels:
+          kubevirt.io/domain: ${VM_NAME}
+      spec:
+        domain:
+          cpu:
+            cores: ${{CPU_CORES}}
+          memory:
+            guest: ${MEMORY}
+          devices:
+            disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+            - name: cloudinitdisk
+              disk:
+                bus: virtio
+            interfaces:
+            - name: default
+              masquerade: {}
+            networkInterfaceMultiqueue: true
+            rng: {}
+        networks:
+        - name: default
+          pod: {}
+        volumes:
+        - name: rootdisk
+          containerDisk:
+            image: quay.io/kubevirt/ubuntu-container-disk:20.04
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              user: ubuntu
+              password: ${USER_PASSWORD}
+              chpasswd: { expire: False }
+              ssh_authorized_keys:
+                - ${SSH_PUBLIC_KEY}
+              package_update: true
+              packages:
+                - qemu-guest-agent
+              runcmd:
+                - systemctl enable qemu-guest-agent
+                - systemctl start qemu-guest-agent
+parameters:
+- name: VM_NAME
+  description: Name of the Virtual Machine
+  required: true
+- name: NAMESPACE
+  description: Namespace where VM will be created
+  value: default
+- name: CPU_CORES
+  description: Number of CPU cores
+  value: "2"
+- name: MEMORY
+  description: Amount of memory
+  value: 2Gi
+- name: USER_PASSWORD
+  description: Password for ubuntu user
+  generate: expression
+  from: '[a-zA-Z0-9]{12}'
+- name: SSH_PUBLIC_KEY
+  description: SSH public key for ubuntu user
+  value: ""
