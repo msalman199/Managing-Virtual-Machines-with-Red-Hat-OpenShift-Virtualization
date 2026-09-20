@@ -1,0 +1,60 @@
+# Create file: ha-test-vms.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: failover-test-vm-1
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: failover-test-vm-1
+        test-group: failover
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: failover-test-vm-2
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: failover-test-vm-2
+        test-group: failover
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo

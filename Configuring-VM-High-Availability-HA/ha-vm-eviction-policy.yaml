@@ -1,0 +1,32 @@
+# Create file: ha-vm-eviction-policy.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-eviction-policy
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-eviction-policy
+      annotations:
+        kubevirt.io/evictionStrategy: LiveMigrate
+    spec:
+      evictionStrategy: LiveMigrate
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo

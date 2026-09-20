@@ -1,0 +1,647 @@
+Lab 16: Configuring VM High Availability (HA)
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the concepts of high availability (HA) for virtual machines in OpenShift Virtualization
+Configure Kubernetes taints and tolerations to manage VM placement and availability
+Set up VM affinity and anti-affinity rules for optimal distribution
+Simulate node failures and verify automatic VM failover mechanisms
+Implement best practices for ensuring VM resilience in a cluster environment
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes concepts (pods, nodes, deployments)
+Familiarity with OpenShift Virtualization fundamentals
+Knowledge of YAML configuration files
+Understanding of command-line interface operations
+Completed previous labs on VM creation and management
+Required Knowledge Areas
+Kubernetes Scheduling: Understanding how pods are assigned to nodes
+Node Management: Basic concepts of node labeling and selection
+YAML Syntax: Ability to read and modify YAML configuration files
+Linux Command Line: Comfortable with basic terminal operations
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+Multi-node OpenShift cluster with virtualization capabilities
+Pre-installed OpenShift Virtualization operator
+Command-line tools (oc, kubectl, virtctl)
+Sample VM templates and configurations
+Task 1: Configure Kubernetes Taints and Tolerations for HA
+Subtask 1.1: Understanding Taints and Tolerations
+Taints and tolerations work together to ensure that VMs are scheduled appropriately across nodes and can handle node-specific conditions.
+
+Taints: Applied to nodes to repel certain pods/VMs
+Tolerations: Applied to VMs to allow them to be scheduled on tainted nodes
+Subtask 1.2: Examine Current Node Status
+First, let's examine the current state of our cluster nodes:
+
+# List all nodes in the cluster
+oc get nodes
+
+# Check node details and taints
+oc describe nodes
+Subtask 1.3: Apply Taints to Nodes
+We'll apply taints to simulate different node conditions and prepare for HA scenarios:
+
+# Apply a taint to simulate a node under maintenance
+oc adm taint nodes worker-1 maintenance=true:NoSchedule
+
+# Apply a taint for dedicated VM workloads
+oc adm taint nodes worker-2 dedicated=vm-workload:NoSchedule
+
+# Verify taints have been applied
+oc describe node worker-1 | grep -i taint
+oc describe node worker-2 | grep -i taint
+Subtask 1.4: Create a VM with Tolerations
+Create a VM configuration that includes tolerations to handle tainted nodes:
+
+# Create file: ha-vm-with-tolerations.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-tolerations
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-tolerations
+    spec:
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "vm-workload"
+        effect: "NoSchedule"
+      - key: "maintenance"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+        tolerationSeconds: 300
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
+Apply the VM configuration:
+
+# Create the VM with tolerations
+oc apply -f ha-vm-with-tolerations.yaml
+
+# Verify VM creation and scheduling
+oc get vms
+oc get vmis
+oc describe vmi ha-vm-tolerations
+Subtask 1.5: Test Toleration Behavior
+Verify that the VM can be scheduled on tainted nodes:
+
+# Check which node the VM is running on
+oc get vmi ha-vm-tolerations -o wide
+
+# Verify the VM is tolerating the taints
+oc describe vmi ha-vm-tolerations | grep -A 10 -i toleration
+Task 2: Set VM Affinity Rules
+Subtask 2.1: Understanding VM Affinity
+VM affinity rules control how VMs are distributed across nodes:
+
+Node Affinity: Controls which nodes VMs can be scheduled on
+Pod Anti-Affinity: Ensures VMs are spread across different nodes
+Pod Affinity: Groups related VMs on the same or nearby nodes
+Subtask 2.2: Label Nodes for Affinity Rules
+First, let's label our nodes to create logical groups:
+
+# Label nodes with zones for affinity rules
+oc label node worker-1 zone=zone-a
+oc label node worker-2 zone=zone-b
+oc label node worker-3 zone=zone-c
+
+# Label nodes with hardware types
+oc label node worker-1 hardware=ssd
+oc label node worker-2 hardware=nvme
+oc label node worker-3 hardware=ssd
+
+# Verify labels
+oc get nodes --show-labels
+Subtask 2.3: Create VM with Node Affinity
+Create a VM that prefers to run on nodes with SSD storage:
+
+# Create file: ha-vm-node-affinity.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-node-affinity
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-node-affinity
+        app: database
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: hardware
+                operator: In
+                values:
+                - ssd
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: zone
+                operator: In
+                values:
+                - zone-a
+                - zone-b
+                - zone-c
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+Apply the configuration:
+
+# Create the VM with node affinity
+oc apply -f ha-vm-node-affinity.yaml
+
+# Verify scheduling
+oc get vmi ha-vm-node-affinity -o wide
+Subtask 2.4: Create VMs with Anti-Affinity Rules
+Create multiple VMs that should be distributed across different nodes:
+
+# Create file: ha-vm-anti-affinity.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-web-1
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-web-1
+        app: web-server
+        tier: frontend
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - web-server
+            topologyKey: kubernetes.io/hostname
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-web-2
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-web-2
+        app: web-server
+        tier: frontend
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - web-server
+            topologyKey: kubernetes.io/hostname
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+Apply the anti-affinity configuration:
+
+# Create VMs with anti-affinity rules
+oc apply -f ha-vm-anti-affinity.yaml
+
+# Verify VMs are on different nodes
+oc get vmi -l app=web-server -o wide
+Subtask 2.5: Verify Affinity Rule Enforcement
+Check that the affinity rules are working correctly:
+
+# List all VMIs and their node assignments
+oc get vmi -o custom-columns=NAME:.metadata.name,NODE:.status.nodeName,LABELS:.metadata.labels
+
+# Describe VMIs to see affinity details
+oc describe vmi ha-vm-web-1 | grep -A 20 -i affinity
+oc describe vmi ha-vm-web-2 | grep -A 20 -i affinity
+Task 3: Simulate Node Failure and Verify VM Failover
+Subtask 3.1: Prepare for Failover Testing
+Before simulating failures, let's set up monitoring and create additional VMs for testing:
+
+# Create a monitoring script to watch VM status
+cat > monitor-vms.sh << 'EOF'
+#!/bin/bash
+echo "Monitoring VM status - Press Ctrl+C to stop"
+while true; do
+    clear
+    echo "=== VM Status at $(date) ==="
+    oc get vmi -o wide
+    echo ""
+    echo "=== Node Status ==="
+    oc get nodes
+    sleep 5
+done
+EOF
+
+chmod +x monitor-vms.sh
+Subtask 3.2: Create Test VMs for Failover
+Create additional VMs to test failover scenarios:
+
+# Create file: ha-test-vms.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: failover-test-vm-1
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: failover-test-vm-1
+        test-group: failover
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+---
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: failover-test-vm-2
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: failover-test-vm-2
+        test-group: failover
+    spec:
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 512Mi
+            cpu: 500m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+Apply the test VMs:
+
+# Create test VMs
+oc apply -f ha-test-vms.yaml
+
+# Wait for VMs to be ready
+oc wait --for=condition=Ready vmi/failover-test-vm-1 --timeout=300s
+oc wait --for=condition=Ready vmi/failover-test-vm-2 --timeout=300s
+
+# Check initial placement
+oc get vmi -l test-group=failover -o wide
+Subtask 3.3: Simulate Node Failure - Method 1 (Node Drain)
+Simulate a planned node failure using node drain:
+
+# Identify a node with running VMs
+TARGET_NODE=$(oc get vmi failover-test-vm-1 -o jsonpath='{.status.nodeName}')
+echo "Target node for drain: $TARGET_NODE"
+
+# Start monitoring in another terminal (optional)
+# ./monitor-vms.sh
+
+# Drain the node (this simulates planned maintenance)
+oc adm drain $TARGET_NODE --ignore-daemonsets --delete-emptydir-data --force
+
+# Watch VM migration
+oc get vmi -l test-group=failover -o wide -w
+Subtask 3.4: Verify VM Migration
+Check that VMs have been successfully migrated:
+
+# Check VM status after drain
+oc get vmi -l test-group=failover -o wide
+
+# Check events for migration details
+oc get events --sort-by='.lastTimestamp' | grep -i migration
+
+# Verify VMs are still running
+oc get vms -l test-group=failover
+Subtask 3.5: Restore Node and Test Recovery
+Restore the drained node and verify normal operations:
+
+# Uncordon the node
+oc adm uncordon $TARGET_NODE
+
+# Verify node is ready
+oc get nodes
+
+# Check if new VMs can be scheduled on the restored node
+oc apply -f - << 'EOF'
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: recovery-test-vm
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: recovery-test-vm
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: TARGET_NODE_NAME
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 256Mi
+            cpu: 250m
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+EOF
+Subtask 3.6: Simulate Node Failure - Method 2 (Node Shutdown)
+For a more realistic failure simulation, we can simulate an unplanned node shutdown:
+
+# Mark a node as unschedulable
+TARGET_NODE=$(oc get vmi failover-test-vm-2 -o jsonpath='{.status.nodeName}')
+oc adm cordon $TARGET_NODE
+
+# Simulate node failure by marking it as NotReady
+# Note: In a real scenario, this would happen automatically
+oc patch node $TARGET_NODE -p '{"status":{"conditions":[{"type":"Ready","status":"False","reason":"NodeShutdown","message":"Node is shutting down"}]}}'
+
+# Watch for automatic VM eviction
+oc get vmi -l test-group=failover -o wide -w
+Subtask 3.7: Configure VM Eviction Policies
+Create a VM with specific eviction policies for better HA:
+
+# Create file: ha-vm-eviction-policy.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-eviction-policy
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-eviction-policy
+      annotations:
+        kubevirt.io/evictionStrategy: LiveMigrate
+    spec:
+      evictionStrategy: LiveMigrate
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+Apply the eviction policy configuration:
+
+# Create VM with eviction policy
+oc apply -f ha-vm-eviction-policy.yaml
+
+# Verify the eviction strategy
+oc describe vmi ha-vm-eviction-policy | grep -i eviction
+Troubleshooting Common Issues
+Issue 1: VMs Not Scheduling Due to Taints
+Problem: VMs remain in Pending state due to node taints.
+
+Solution:
+
+# Check node taints
+oc describe nodes | grep -i taint
+
+# Add appropriate tolerations to VM spec
+# Or remove unnecessary taints
+oc adm taint nodes worker-1 maintenance=true:NoSchedule-
+Issue 2: Anti-Affinity Rules Too Restrictive
+Problem: VMs cannot be scheduled due to strict anti-affinity rules.
+
+Solution:
+
+# Use preferredDuringSchedulingIgnoredDuringExecution instead of required
+# Or adjust the topologyKey to be less restrictive
+Issue 3: Migration Failures
+Problem: VMs fail to migrate during node drain.
+
+Solution:
+
+# Check migration status
+oc get virtualmachineinstancemigration
+
+# Check events for error details
+oc get events --sort-by='.lastTimestamp'
+
+# Ensure sufficient resources on target nodes
+oc describe nodes
+Issue 4: Slow Failover Response
+Problem: VMs take too long to failover after node failure.
+
+Solution:
+
+# Adjust node monitor grace period (cluster-level setting)
+# Configure faster health checks
+# Use LiveMigrate eviction strategy for faster response
+Verification and Testing
+Comprehensive HA Test
+Run this comprehensive test to verify all HA configurations:
+
+# Create verification script
+cat > verify-ha-setup.sh << 'EOF'
+#!/bin/bash
+
+echo "=== High Availability Verification ==="
+echo ""
+
+echo "1. Checking node status and taints:"
+oc get nodes -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[-1].type,TAINTS:.spec.taints
+
+echo ""
+echo "2. Checking VM distribution across nodes:"
+oc get vmi -o custom-columns=NAME:.metadata.name,NODE:.status.nodeName,PHASE:.status.phase
+
+echo ""
+echo "3. Checking affinity and anti-affinity rules:"
+oc get vmi -o yaml | grep -A 10 -B 2 affinity
+
+echo ""
+echo "4. Checking eviction strategies:"
+oc get vmi -o custom-columns=NAME:.metadata.name,EVICTION:.spec.evictionStrategy
+
+echo ""
+echo "5. Testing node drain simulation:"
+# This would be run interactively
+echo "Run: oc adm drain <node-name> --ignore-daemonsets --delete-emptydir-data --force"
+
+echo ""
+echo "=== HA Verification Complete ==="
+EOF
+
+chmod +x verify-ha-setup.sh
+./verify-ha-setup.sh
+Cleanup
+Clean up the lab environment:
+
+# Remove test VMs
+oc delete vm --all
+
+# Remove taints from nodes
+oc adm taint nodes worker-1 maintenance=true:NoSchedule-
+oc adm taint nodes worker-2 dedicated=vm-workload:NoSchedule-
+
+# Remove labels from nodes
+oc label node worker-1 zone- hardware-
+oc label node worker-2 zone- hardware-
+oc label node worker-3 zone- hardware-
+
+# Uncordon any cordoned nodes
+oc get nodes | grep SchedulingDisabled | awk '{print $1}' | xargs -I {} oc adm uncordon {}
+
+# Remove created files
+rm -f ha-vm-*.yaml monitor-vms.sh verify-ha-setup.sh
+Conclusion
+In this lab, you have successfully:
+
+Configured Kubernetes taints and tolerations to control VM scheduling and handle node-specific conditions
+Implemented VM affinity rules including node affinity, pod affinity, and anti-affinity to optimize VM distribution
+Simulated node failures and verified automatic VM failover mechanisms work correctly
+Tested different eviction strategies to ensure VMs can migrate gracefully during planned maintenance
+Learned troubleshooting techniques for common HA configuration issues
+Key Takeaways
+High Availability Concepts: You now understand how Kubernetes scheduling mechanisms can be leveraged to ensure VM availability across cluster nodes.
+
+Practical Skills: You can configure production-ready HA setups that automatically handle node failures and distribute workloads appropriately.
+
+Real-World Application: These skills are essential for managing enterprise virtualization environments where uptime and reliability are critical business requirements.
+
+Why This Matters
+High availability configuration is crucial for production environments because:
+
+Business Continuity: Ensures services remain available even when hardware fails
+Automated Recovery: Reduces manual intervention during outages
+Resource Optimization: Distributes workloads efficiently across available infrastructure
+Compliance: Meets enterprise requirements for system reliability and uptime
+The techniques you've learned in this lab form the foundation for building resilient, enterprise-grade virtualized infrastructure using open-source technologies.

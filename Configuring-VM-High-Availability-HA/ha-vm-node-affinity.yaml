@@ -1,0 +1,49 @@
+# Create file: ha-vm-node-affinity.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-node-affinity
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-node-affinity
+        app: database
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: hardware
+                operator: In
+                values:
+                - ssd
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: zone
+                operator: In
+                values:
+                - zone-a
+                - zone-b
+                - zone-c
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo

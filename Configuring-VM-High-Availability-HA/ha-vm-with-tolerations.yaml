@@ -1,0 +1,51 @@
+# Create file: ha-vm-with-tolerations.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: ha-vm-tolerations
+  namespace: default
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: ha-vm-tolerations
+    spec:
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "vm-workload"
+        effect: "NoSchedule"
+      - key: "maintenance"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+        tolerationSeconds: 300
+      domain:
+        devices:
+          disks:
+          - name: containerdisk
+            disk:
+              bus: virtio
+          - name: cloudinitdisk
+            disk:
+              bus: virtio
+          interfaces:
+          - name: default
+            masquerade: {}
+        machine:
+          type: ""
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userDataBase64: SGkuXG4=
