@@ -1,0 +1,530 @@
+Lab 20: Virtual Machine Migration Between Clusters
+Objectives
+By the end of this lab, you will be able to:
+
+• Set up and configure a multi-cluster OpenShift environment for VM migration • Understand the concepts and requirements for cross-cluster VM migration • Use virtctl and OpenShift tools to migrate virtual machines between clusters • Verify VM functionality and data integrity after migration • Troubleshoot common migration issues and implement best practices • Implement proper networking and storage considerations for cross-cluster migrations
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic understanding of OpenShift Container Platform concepts • Familiarity with Kubernetes resources (pods, services, persistent volumes) • Experience with OpenShift Virtualization (CNV) fundamentals • Knowledge of Linux command line operations • Understanding of virtualization concepts and VM lifecycle management • Basic networking knowledge (VLANs, subnets, routing)
+
+Required Tools
+• Access to two OpenShift clusters with OpenShift Virtualization installed • virtctl CLI tool • oc CLI tool • kubectl CLI tool • SSH access to cluster nodes (if needed)
+
+Ready-to-Use Cloud Machines
+Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment. No need to build your own VMs or configure the initial setup - everything is ready for you to begin the migration exercises immediately.
+
+Your lab environment includes: • Two OpenShift clusters (source and destination) • Pre-installed OpenShift Virtualization operators • Sample virtual machines ready for migration • All necessary CLI tools pre-configured
+
+Task 1: Set Up Multi-Cluster OpenShift Environment
+Subtask 1.1: Verify Cluster Access and Configuration
+First, let's verify access to both OpenShift clusters and ensure they're properly configured for VM migration.
+
+Step 1: Check Source Cluster Access
+
+# Set context for source cluster
+export SOURCE_CLUSTER_URL="https://api.source-cluster.example.com:6443"
+export SOURCE_CLUSTER_TOKEN="your-source-cluster-token"
+
+# Login to source cluster
+oc login --token=$SOURCE_CLUSTER_TOKEN --server=$SOURCE_CLUSTER_URL
+
+# Verify cluster status
+oc get nodes
+oc get clusterversion
+Step 2: Check Destination Cluster Access
+
+# Set context for destination cluster
+export DEST_CLUSTER_URL="https://api.dest-cluster.example.com:6443"
+export DEST_CLUSTER_TOKEN="your-dest-cluster-token"
+
+# Login to destination cluster
+oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+
+# Verify cluster status
+oc get nodes
+oc get clusterversion
+Step 3: Verify OpenShift Virtualization Installation
+
+# Check on source cluster
+oc login --token=$SOURCE_CLUSTER_TOKEN --server=$SOURCE_CLUSTER_URL
+oc get csv -n openshift-cnv | grep kubevirt
+
+# Check on destination cluster
+oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+oc get csv -n openshift-cnv | grep kubevirt
+Subtask 1.2: Configure Network Connectivity Between Clusters
+Step 1: Verify Network Connectivity
+
+# From source cluster, test connectivity to destination
+oc get nodes -o wide
+
+# Note the external IPs and test connectivity
+ping <destination-cluster-node-ip>
+Step 2: Configure DNS Resolution (if needed)
+
+# Add DNS entries for cross-cluster communication
+# This may require cluster administrator privileges
+
+cat << EOF > /tmp/cluster-dns-config.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-dns-config
+  namespace: openshift-config
+data:
+  Corefile: |
+    .:53 {
+        errors
+        health
+        ready
+        kubernetes cluster.local in-addr.arpa ip6.arpa {
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+        }
+        prometheus :9153
+        forward . /etc/resolv.conf
+        cache 30
+        loop
+        reload
+        loadbalance
+    }
+    dest-cluster.example.com:53 {
+        forward . <destination-cluster-dns-ip>
+    }
+EOF
+
+oc apply -f /tmp/cluster-dns-config.yaml
+Subtask 1.3: Set Up Storage Classes and Persistent Volumes
+Step 1: Verify Storage Classes on Both Clusters
+
+# Check source cluster storage classes
+oc login --token=$SOURCE_CLUSTER_TOKEN --server=$SOURCE_CLUSTER_URL
+oc get storageclass
+
+# Check destination cluster storage classes
+oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+oc get storageclass
+Step 2: Create Compatible Storage Classes (if needed)
+
+# Create a storage class on destination cluster that matches source
+cat << EOF > /tmp/migration-storage-class.yaml
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: migration-storage
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+EOF
+
+oc apply -f /tmp/migration-storage-class.yaml
+Task 2: Migrate VMs Between Clusters Using virtctl
+Subtask 2.1: Prepare Source VM for Migration
+Step 1: Create a Test VM on Source Cluster
+
+# Switch to source cluster
+oc login --token=$SOURCE_CLUSTER_TOKEN --server=$SOURCE_CLUSTER_URL
+
+# Create a namespace for our migration test
+oc new-project vm-migration-test
+
+# Create a test VM
+cat << EOF > /tmp/test-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: migration-test-vm
+  namespace: vm-migration-test
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/vm: migration-test-vm
+    spec:
+      domain:
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - masquerade: {}
+            name: default
+        resources:
+          requests:
+            memory: 1Gi
+            cpu: 1
+      networks:
+      - name: default
+        pod: {}
+      volumes:
+      - name: containerdisk
+        containerDisk:
+          image: quay.io/kubevirt/cirros-container-disk-demo
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_pwauth: True
+EOF
+
+oc apply -f /tmp/test-vm.yaml
+Step 2: Verify VM is Running and Create Test Data
+
+# Wait for VM to be ready
+oc get vm migration-test-vm -w
+
+# Get VM status
+oc get vmi migration-test-vm
+
+# Connect to VM and create test data
+virtctl console migration-test-vm
+
+# Inside the VM, create a test file
+echo "This is test data for migration" > /tmp/migration-test.txt
+ls -la /tmp/migration-test.txt
+exit
+Step 3: Stop the VM for Migration
+
+# Stop the VM gracefully
+virtctl stop migration-test-vm
+
+# Verify VM is stopped
+oc get vm migration-test-vm
+Subtask 2.2: Export VM Configuration and Data
+Step 1: Export VM Definition
+
+# Export the VM definition
+oc get vm migration-test-vm -o yaml > /tmp/vm-export.yaml
+
+# Clean up the exported YAML (remove cluster-specific fields)
+sed -i '/resourceVersion:/d' /tmp/vm-export.yaml
+sed -i '/uid:/d' /tmp/vm-export.yaml
+sed -i '/selfLink:/d' /tmp/vm-export.yaml
+sed -i '/creationTimestamp:/d' /tmp/vm-export.yaml
+sed -i '/generation:/d' /tmp/vm-export.yaml
+Step 2: Export Persistent Volume Claims (if any)
+
+# Check for PVCs associated with the VM
+oc get pvc -n vm-migration-test
+
+# If PVCs exist, export them
+oc get pvc -n vm-migration-test -o yaml > /tmp/pvc-export.yaml
+
+# Clean up PVC export
+sed -i '/resourceVersion:/d' /tmp/pvc-export.yaml
+sed -i '/uid:/d' /tmp/pvc-export.yaml
+sed -i '/selfLink:/d' /tmp/pvc-export.yaml
+sed -i '/creationTimestamp:/d' /tmp/pvc-export.yaml
+Step 3: Create VM Snapshot (Alternative Method)
+
+# Create a VM snapshot for migration
+cat << EOF > /tmp/vm-snapshot.yaml
+apiVersion: snapshot.kubevirt.io/v1alpha1
+kind: VirtualMachineSnapshot
+metadata:
+  name: migration-test-vm-snapshot
+  namespace: vm-migration-test
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: migration-test-vm
+EOF
+
+oc apply -f /tmp/vm-snapshot.yaml
+
+# Wait for snapshot to complete
+oc get vmsnapshot migration-test-vm-snapshot -w
+Subtask 2.3: Transfer VM to Destination Cluster
+Step 1: Prepare Destination Cluster
+
+# Switch to destination cluster
+oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+
+# Create the same namespace
+oc new-project vm-migration-test
+
+# Verify OpenShift Virtualization is ready
+oc get pods -n openshift-cnv
+Step 2: Import VM Configuration
+
+# Apply the VM configuration to destination cluster
+oc apply -f /tmp/vm-export.yaml
+
+# If PVCs were exported, apply them too
+if [ -f /tmp/pvc-export.yaml ]; then
+    oc apply -f /tmp/pvc-export.yaml
+fi
+Step 3: Handle Data Migration
+
+For VMs with persistent data, you'll need to migrate the actual disk data:
+
+# Method 1: Using volume snapshots (if supported)
+# Create a volume snapshot on source cluster
+oc login --token=$SOURCE_CLUSTER_TOKEN --server=$SOURCE_CLUSTER_URL
+
+cat << EOF > /tmp/volume-snapshot.yaml
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: migration-test-snapshot
+  namespace: vm-migration-test
+spec:
+  source:
+    persistentVolumeClaimName: migration-test-vm-disk
+EOF
+
+oc apply -f /tmp/volume-snapshot.yaml
+
+# Method 2: Using rsync for data transfer (for demonstration)
+# This is a simplified example - production migrations would use more sophisticated tools
+
+# Get source PV path
+SOURCE_PV=$(oc get pvc migration-test-vm-disk -o jsonpath='{.spec.volumeName}')
+echo "Source PV: $SOURCE_PV"
+Task 3: Verify VM Functionality Post-Migration
+Subtask 3.1: Start and Verify Migrated VM
+Step 1: Start the VM on Destination Cluster
+
+# Ensure we're on destination cluster
+oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+
+# Start the migrated VM
+virtctl start migration-test-vm
+
+# Wait for VM to be ready
+oc get vmi migration-test-vm -w
+Step 2: Verify VM Network Connectivity
+
+# Check VM network status
+oc get vmi migration-test-vm -o yaml | grep -A 10 interfaces
+
+# Test network connectivity
+virtctl console migration-test-vm
+
+# Inside VM, test network
+ping 8.8.8.8
+curl -I http://google.com
+exit
+Step 3: Verify VM Performance
+
+# Check VM resource usage
+oc describe vmi migration-test-vm
+
+# Monitor VM performance
+virtctl console migration-test-vm
+
+# Inside VM, run performance tests
+cat /proc/cpuinfo
+free -h
+df -h
+exit
+Subtask 3.2: Validate Data Integrity
+Step 1: Check File System Integrity
+
+# Connect to migrated VM
+virtctl console migration-test-vm
+
+# Check if our test data survived migration
+ls -la /tmp/migration-test.txt
+cat /tmp/migration-test.txt
+
+# Verify file system integrity
+df -h
+mount | grep -v tmpfs
+exit
+Step 2: Perform Application-Level Validation
+
+# If the VM runs applications, test them
+virtctl console migration-test-vm
+
+# Example: Test web service (if applicable)
+# curl http://localhost:8080/health
+
+# Example: Test database connectivity (if applicable)
+# mysql -u testuser -p -e "SELECT 1;"
+
+exit
+Step 3: Compare VM Configuration
+
+# Compare original and migrated VM configurations
+oc login --token=$SOURCE_CLUSTER_TOKEN --server=$SOURCE_CLUSTER_URL
+oc get vm migration-test-vm -o yaml > /tmp/source-vm-config.yaml
+
+oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+oc get vm migration-test-vm -o yaml > /tmp/dest-vm-config.yaml
+
+# Compare configurations (ignoring cluster-specific fields)
+diff -u /tmp/source-vm-config.yaml /tmp/dest-vm-config.yaml | grep -v -E "(resourceVersion|uid|selfLink|creationTimestamp|generation)"
+Subtask 3.3: Performance and Monitoring Validation
+Step 1: Set Up Monitoring for Migrated VM
+
+# Create a service monitor for the VM
+cat << EOF > /tmp/vm-service-monitor.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: migration-test-vm-monitor
+  namespace: vm-migration-test
+spec:
+  selector:
+    matchLabels:
+      kubevirt.io/vm: migration-test-vm
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+EOF
+
+oc apply -f /tmp/vm-service-monitor.yaml
+Step 2: Verify VM Metrics
+
+# Check VM metrics
+oc get --raw /api/v1/namespaces/vm-migration-test/pods | jq '.items[] | select(.metadata.labels."kubevirt.io/vm" == "migration-test-vm") | .metadata.name'
+
+# Get VM pod metrics
+VM_POD=$(oc get pods -l kubevirt.io/vm=migration-test-vm -o jsonpath='{.items[0].metadata.name}')
+oc exec $VM_POD -- cat /proc/meminfo | head -5
+Step 3: Load Testing (Optional)
+
+# Connect to VM for load testing
+virtctl console migration-test-vm
+
+# Simple CPU load test
+yes > /dev/null &
+PID=$!
+sleep 10
+kill $PID
+
+# Simple memory test
+dd if=/dev/zero of=/tmp/memtest bs=1M count=100
+rm /tmp/memtest
+
+exit
+Troubleshooting Common Issues
+Issue 1: VM Fails to Start on Destination Cluster
+Symptoms: VM remains in "Pending" or "Failed" state
+
+Solutions:
+
+# Check VM events
+oc describe vm migration-test-vm
+
+# Check VMI events
+oc describe vmi migration-test-vm
+
+# Common fixes:
+# 1. Storage class compatibility
+oc get storageclass
+oc patch vm migration-test-vm -p '{"spec":{"template":{"spec":{"volumes":[{"name":"containerdisk","containerDisk":{"image":"quay.io/kubevirt/cirros-container-disk-demo"}}]}}}}'
+
+# 2. Resource constraints
+oc describe nodes | grep -A 5 "Allocated resources"
+Issue 2: Network Connectivity Problems
+Symptoms: VM starts but has no network access
+
+Solutions:
+
+# Check network policies
+oc get networkpolicy -n vm-migration-test
+
+# Verify CNI configuration
+oc get network.operator cluster -o yaml
+
+# Check VM network configuration
+oc get vmi migration-test-vm -o yaml | grep -A 20 networks
+Issue 3: Data Migration Incomplete
+Symptoms: VM starts but data is missing
+
+Solutions:
+
+# Verify PVC status
+oc get pvc -n vm-migration-test
+
+# Check volume mounts
+oc describe vmi migration-test-vm | grep -A 10 Volumes
+
+# Manual data recovery (if needed)
+# This would involve accessing the underlying storage
+Best Practices for VM Migration
+Planning Phase
+• Inventory Assessment: Document all VMs, their dependencies, and resource requirements • Network Planning: Ensure network connectivity and DNS resolution between clusters • Storage Compatibility: Verify storage classes and volume types are compatible • Downtime Planning: Schedule migrations during maintenance windows
+
+Migration Execution
+• Backup First: Always create backups before migration • Test Migrations: Perform test migrations with non-critical VMs first • Monitor Resources: Watch cluster resources during migration • Validate Incrementally: Test each component after migration
+
+Post-Migration
+• Performance Monitoring: Monitor VM performance for several days • Application Testing: Thoroughly test all applications • Documentation: Update documentation with new cluster information • Cleanup: Remove VMs from source cluster only after validation
+
+Advanced Migration Scenarios
+Live Migration Between Clusters
+For environments that support it, you can perform live migrations:
+
+# Create a migration object
+cat << EOF > /tmp/live-migration.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachineInstanceMigration
+metadata:
+  name: migration-test-vm-migration
+  namespace: vm-migration-test
+spec:
+  vmiName: migration-test-vm
+EOF
+
+oc apply -f /tmp/live-migration.yaml
+Batch Migration Script
+For migrating multiple VMs:
+
+#!/bin/bash
+# batch-migrate.sh
+
+VMS=("vm1" "vm2" "vm3")
+SOURCE_NAMESPACE="production"
+DEST_NAMESPACE="production"
+
+for vm in "${VMS[@]}"; do
+    echo "Migrating $vm..."
+    
+    # Stop VM
+    virtctl stop $vm -n $SOURCE_NAMESPACE
+    
+    # Export configuration
+    oc get vm $vm -n $SOURCE_NAMESPACE -o yaml > /tmp/${vm}-export.yaml
+    
+    # Clean up export
+    sed -i '/resourceVersion:/d' /tmp/${vm}-export.yaml
+    sed -i '/uid:/d' /tmp/${vm}-export.yaml
+    
+    # Switch to destination cluster
+    oc login --token=$DEST_CLUSTER_TOKEN --server=$DEST_CLUSTER_URL
+    
+    # Import VM
+    oc apply -f /tmp/${vm}-export.yaml -n $DEST_NAMESPACE
+    
+    # Start VM
+    virtctl start $vm -n $DEST_NAMESPACE
+    
+    echo "Migration of $vm completed"
+done
+Conclusion
+In this lab, you have successfully:
+
+• Set up a multi-cluster environment with proper networking and storage configuration for VM migration • Learned migration techniques using virtctl and OpenShift native tools to move VMs between clusters • Validated migration success by verifying VM functionality, data integrity, and performance post-migration • Implemented best practices for planning, executing, and validating cross-cluster VM migrations • Troubleshot common issues that arise during VM migration processes
+
+Why This Matters: VM migration between clusters is a critical skill for:
+
+Disaster Recovery: Moving workloads during cluster failures
+Cluster Upgrades: Migrating VMs during infrastructure updates
+Load Balancing: Distributing VMs across clusters for optimal performance
+Cost Optimization: Moving workloads to more cost-effective clusters
+Compliance: Ensuring VMs run in appropriate geographic regions
+This knowledge prepares you for real-world scenarios where you need to maintain business continuity while managing complex virtualized infrastructure across multiple OpenShift clusters. The skills learned here are directly applicable to production environments and are essential for the Managing Virtual Machines with Red Hat OpenShift Virtualization certification.
