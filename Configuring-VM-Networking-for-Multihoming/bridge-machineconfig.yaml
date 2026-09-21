@@ -1,0 +1,26 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 99-worker-bridge-setup
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+      - name: bridge-setup.service
+        enabled: true
+        contents: |
+          [Unit]
+          Description=Setup bridge for multihoming
+          After=network.target
+          
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/bash -c 'ip link add br1 type bridge || true; ip link set br1 up || true'
+          RemainAfterExit=yes
+          
+          [Install]
+          WantedBy=multi-user.target

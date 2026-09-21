@@ -1,0 +1,78 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora-multihome
+  namespace: vm-multihoming
+  labels:
+    app: fedora-multihome
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: fedora-multihome
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |
+          [
+            {
+              "name": "bridge-network",
+              "namespace": "default"
+            },
+            {
+              "name": "macvlan-network", 
+              "namespace": "default"
+            }
+          ]
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: bridge-net
+            bridge: {}
+          - name: macvlan-net
+            bridge: {}
+          rng: {}
+        machine:
+          type: pc-q35-rhel9.2.0
+        resources:
+          requests:
+            memory: 2Gi
+      evictionStrategy: LiveMigrate
+      networks:
+      - name: default
+        pod: {}
+      - name: bridge-net
+        multus:
+          networkName: default/bridge-network
+      - name: macvlan-net
+        multus:
+          networkName: default/macvlan-network
+      terminationGracePeriodSeconds: 180
+      volumes:
+      - dataVolume:
+          name: fedora-multihome-dv
+        name: containerdisk
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            user: fedora
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_authorized_keys:
+              - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... # Add your SSH key here
+            runcmd:
+              - dnf install -y net-tools tcpdump
+              - systemctl enable sshd
+              - systemctl start sshd
+        name: cloudinitdisk

@@ -1,0 +1,556 @@
+Lab 19: Configuring VM Networking for Multihoming
+Objectives
+By the end of this lab, you will be able to:
+
+Install and configure the Multus CNI plugin for multiple network interfaces
+Create virtual machines with multiple network interfaces using OpenShift Virtualization
+Verify network connectivity across multiple networks for multihomed VMs
+Understand the concepts of multihoming and its practical applications
+Troubleshoot common networking issues in multihomed VM environments
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Kubernetes networking concepts
+Familiarity with OpenShift Virtualization fundamentals
+Knowledge of Linux command-line operations
+Understanding of network interface configuration
+Basic YAML syntax knowledge
+Required Knowledge Areas:
+Container Network Interface (CNI) concepts
+Virtual machine networking basics
+OpenShift/Kubernetes resource management
+Network troubleshooting fundamentals
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with OpenShift Virtualization already installed. Simply click Start Lab to access your environment - no need to build your own VM or install additional software.
+
+Your lab environment includes:
+
+OpenShift cluster with Virtualization operator
+Pre-configured storage classes
+Administrative access to the cluster
+Network tools for testing connectivity
+Task 1: Install and Configure the Multus CNI Plugin
+Subtask 1.1: Verify Current CNI Configuration
+First, let's examine the current networking setup in your OpenShift cluster.
+
+Connect to your lab environment and open a terminal session.
+
+Check the current CNI configuration:
+
+# List current network attachment definitions
+oc get network-attachment-definitions -A
+
+# Check the cluster network configuration
+oc get network.config.openshift.io cluster -o yaml
+Verify the Multus CNI is available:
+# Check if Multus is already installed (it should be in OpenShift 4.x)
+oc get pods -n openshift-multus
+
+# Verify Multus daemonset
+oc get daemonset -n openshift-multus
+Subtask 1.2: Create Additional Network Configurations
+Now we'll create additional network configurations that our VMs can use.
+
+Create a bridge network configuration:
+# Create a file for the bridge network
+cat << EOF > bridge-network.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: bridge-network
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "bridge-network",
+      "type": "bridge",
+      "bridge": "br1",
+      "isDefaultGateway": false,
+      "forceAddress": false,
+      "ipMasq": true,
+      "hairpinMode": true,
+      "ipam": {
+        "type": "host-local",
+        "subnet": "192.168.100.0/24",
+        "rangeStart": "192.168.100.10",
+        "rangeEnd": "192.168.100.100",
+        "gateway": "192.168.100.1"
+      }
+    }
+EOF
+
+# Apply the bridge network configuration
+oc apply -f bridge-network.yaml
+Create a macvlan network configuration:
+# Create a file for the macvlan network
+cat << EOF > macvlan-network.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: macvlan-network
+  namespace: default
+spec:
+  config: |
+    {
+      "cniVersion": "0.3.1",
+      "name": "macvlan-network",
+      "type": "macvlan",
+      "master": "eth0",
+      "mode": "bridge",
+      "ipam": {
+        "type": "host-local",
+        "subnet": "192.168.200.0/24",
+        "rangeStart": "192.168.200.10",
+        "rangeEnd": "192.168.200.100",
+        "gateway": "192.168.200.1"
+      }
+    }
+EOF
+
+# Apply the macvlan network configuration
+oc apply -f macvlan-network.yaml
+Verify the network attachment definitions:
+# List all network attachment definitions
+oc get network-attachment-definitions
+
+# Get detailed information about our networks
+oc describe network-attachment-definition bridge-network
+oc describe network-attachment-definition macvlan-network
+Subtask 1.3: Configure Node Network Preparation
+Prepare the nodes for additional networking.
+
+Create a MachineConfig for bridge setup (if needed):
+cat << EOF > bridge-machineconfig.yaml
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+  name: 99-worker-bridge-setup
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+      - name: bridge-setup.service
+        enabled: true
+        contents: |
+          [Unit]
+          Description=Setup bridge for multihoming
+          After=network.target
+          
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/bash -c 'ip link add br1 type bridge || true; ip link set br1 up || true'
+          RemainAfterExit=yes
+          
+          [Install]
+          WantedBy=multi-user.target
+EOF
+
+# Apply the machine config (this will trigger node reboots)
+# oc apply -f bridge-machineconfig.yaml
+Note: In a lab environment, we'll skip the MachineConfig application to avoid node reboots. The bridge will be created dynamically.
+
+Task 2: Create a VM with Multiple Network Interfaces
+Subtask 2.1: Prepare VM Resources
+Let's create the necessary resources for our multihomed VM.
+
+Create a namespace for our VM:
+# Create a dedicated namespace
+oc create namespace vm-multihoming
+
+# Set the current context to use this namespace
+oc project vm-multihoming
+Create a DataVolume for the VM:
+cat << EOF > vm-datavolume.yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora-multihome-dv
+  namespace: vm-multihoming
+spec:
+  source:
+    registry:
+      url: "docker://quay.io/containerdisks/fedora:latest"
+  storage:
+    resources:
+      requests:
+        storage: 10Gi
+    storageClassName: gp3-csi
+EOF
+
+# Apply the DataVolume
+oc apply -f vm-datavolume.yaml
+Wait for the DataVolume to be ready:
+# Monitor the DataVolume creation
+oc get datavolume fedora-multihome-dv -w
+
+# Check the status (wait until PHASE shows Succeeded)
+oc get datavolume fedora-multihome-dv
+Subtask 2.2: Create the Multihomed Virtual Machine
+Now we'll create a VM with multiple network interfaces.
+
+Create the VM definition with multiple networks:
+cat << EOF > multihomed-vm.yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora-multihome
+  namespace: vm-multihoming
+  labels:
+    app: fedora-multihome
+spec:
+  running: true
+  template:
+    metadata:
+      labels:
+        kubevirt.io/domain: fedora-multihome
+      annotations:
+        k8s.v1.cni.cncf.io/networks: |
+          [
+            {
+              "name": "bridge-network",
+              "namespace": "default"
+            },
+            {
+              "name": "macvlan-network", 
+              "namespace": "default"
+            }
+          ]
+    spec:
+      domain:
+        cpu:
+          cores: 2
+        devices:
+          disks:
+          - disk:
+              bus: virtio
+            name: containerdisk
+          - disk:
+              bus: virtio
+            name: cloudinitdisk
+          interfaces:
+          - name: default
+            masquerade: {}
+          - name: bridge-net
+            bridge: {}
+          - name: macvlan-net
+            bridge: {}
+          rng: {}
+        machine:
+          type: pc-q35-rhel9.2.0
+        resources:
+          requests:
+            memory: 2Gi
+      evictionStrategy: LiveMigrate
+      networks:
+      - name: default
+        pod: {}
+      - name: bridge-net
+        multus:
+          networkName: default/bridge-network
+      - name: macvlan-net
+        multus:
+          networkName: default/macvlan-network
+      terminationGracePeriodSeconds: 180
+      volumes:
+      - dataVolume:
+          name: fedora-multihome-dv
+        name: containerdisk
+      - cloudInitNoCloud:
+          userData: |
+            #cloud-config
+            user: fedora
+            password: fedora
+            chpasswd: { expire: False }
+            ssh_authorized_keys:
+              - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... # Add your SSH key here
+            runcmd:
+              - dnf install -y net-tools tcpdump
+              - systemctl enable sshd
+              - systemctl start sshd
+        name: cloudinitdisk
+EOF
+
+# Apply the VM configuration
+oc apply -f multihomed-vm.yaml
+Monitor VM creation and startup:
+# Watch the VM status
+oc get vm fedora-multihome -w
+
+# Check the VMI (Virtual Machine Instance) status
+oc get vmi fedora-multihome
+
+# Get detailed VM information
+oc describe vm fedora-multihome
+Subtask 2.3: Access the Virtual Machine
+Let's access our VM to configure the additional network interfaces.
+
+Connect to the VM console:
+# Access the VM console
+virtctl console fedora-multihome -n vm-multihoming
+Login to the VM (use credentials: fedora/fedora)
+
+Check the network interfaces inside the VM:
+
+# List all network interfaces
+ip addr show
+
+# Check routing table
+ip route show
+
+# List network interface names
+ls /sys/class/net/
+You should see multiple network interfaces:
+
+eth0: Default pod network (masquerade)
+eth1: Bridge network interface
+eth2: Macvlan network interface
+Task 3: Verify VM Network Connectivity Across Multiple Networks
+Subtask 3.1: Configure Additional Network Interfaces
+Inside the VM, we need to configure the additional network interfaces.
+
+Configure the bridge network interface (eth1):
+# Configure eth1 with bridge network settings
+sudo ip addr add 192.168.100.50/24 dev eth1
+sudo ip link set eth1 up
+
+# Verify the configuration
+ip addr show eth1
+Configure the macvlan network interface (eth2):
+# Configure eth2 with macvlan network settings
+sudo ip addr add 192.168.200.50/24 dev eth2
+sudo ip link set eth2 up
+
+# Verify the configuration
+ip addr show eth2
+Update the routing table:
+# Add routes for the additional networks
+sudo ip route add 192.168.100.0/24 dev eth1
+sudo ip route add 192.168.200.0/24 dev eth2
+
+# Display the updated routing table
+ip route show
+Subtask 3.2: Test Network Connectivity
+Now let's test connectivity across all networks.
+
+Exit the VM console (press Ctrl+] to exit virtctl console)
+
+Create test pods on different networks to verify connectivity:
+
+# Create a test pod on the bridge network
+cat << EOF > test-pod-bridge.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-bridge
+  namespace: vm-multihoming
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/bridge-network
+spec:
+  containers:
+  - name: test-container
+    image: registry.access.redhat.com/ubi8/ubi:latest
+    command: ["/bin/bash"]
+    args: ["-c", "sleep 3600"]
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+EOF
+
+# Apply the test pod
+oc apply -f test-pod-bridge.yaml
+Create a test pod on the macvlan network:
+cat << EOF > test-pod-macvlan.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pod-macvlan
+  namespace: vm-multihoming
+  annotations:
+    k8s.v1.cni.cncf.io/networks: default/macvlan-network
+spec:
+  containers:
+  - name: test-container
+    image: registry.access.redhat.com/ubi8/ubi:latest
+    command: ["/bin/bash"]
+    args: ["-c", "sleep 3600"]
+    resources:
+      requests:
+        memory: "64Mi"
+        cpu: "50m"
+EOF
+
+# Apply the test pod
+oc apply -f test-pod-macvlan.yaml
+Wait for pods to be ready:
+# Check pod status
+oc get pods -n vm-multihoming
+
+# Wait for pods to be running
+oc wait --for=condition=Ready pod/test-pod-bridge -n vm-multihoming --timeout=300s
+oc wait --for=condition=Ready pod/test-pod-macvlan -n vm-multihoming --timeout=300s
+Subtask 3.3: Perform Connectivity Tests
+Let's test network connectivity between the VM and test pods.
+
+Get IP addresses of test pods:
+# Get bridge network pod IP
+oc exec test-pod-bridge -n vm-multihoming -- ip addr show
+
+# Get macvlan network pod IP  
+oc exec test-pod-macvlan -n vm-multihoming -- ip addr show
+Test connectivity from VM to bridge network:
+# Access VM console again
+virtctl console fedora-multihome -n vm-multihoming
+
+# Inside the VM, ping the bridge network gateway
+ping -c 4 192.168.100.1
+
+# Test connectivity to bridge network range
+ping -c 4 192.168.100.10
+Test connectivity from VM to macvlan network:
+# Inside the VM, ping the macvlan network gateway
+ping -c 4 192.168.200.1
+
+# Test connectivity to macvlan network range
+ping -c 4 192.168.200.10
+Test connectivity from test pods to VM:
+# Exit VM console (Ctrl+])
+
+# Test from bridge network pod to VM
+oc exec test-pod-bridge -n vm-multihoming -- ping -c 4 192.168.100.50
+
+# Test from macvlan network pod to VM
+oc exec test-pod-macvlan -n vm-multihoming -- ping -c 4 192.168.200.50
+Subtask 3.4: Verify Network Interface Statistics
+Let's examine network statistics and traffic flow.
+
+Check network statistics on the VM:
+# Access VM console
+virtctl console fedora-multihome -n vm-multihoming
+
+# Check interface statistics
+cat /proc/net/dev
+
+# Use netstat to check network connections
+netstat -i
+
+# Check ARP tables
+arp -a
+Monitor network traffic (optional):
+# Install tcpdump if not already installed
+sudo dnf install -y tcpdump
+
+# Monitor traffic on eth1 (bridge network)
+sudo tcpdump -i eth1 -c 10
+
+# Monitor traffic on eth2 (macvlan network) 
+sudo tcpdump -i eth2 -c 10
+Troubleshooting Common Issues
+Issue 1: Network Attachment Definitions Not Found
+Problem: Error message about network attachment definitions not being found.
+
+Solution:
+
+# Verify network attachment definitions exist
+oc get network-attachment-definitions -A
+
+# Check if they're in the correct namespace
+oc get network-attachment-definitions -n default
+
+# Recreate if missing
+oc apply -f bridge-network.yaml
+oc apply -f macvlan-network.yaml
+Issue 2: VM Not Getting Additional IP Addresses
+Problem: VM only shows the default interface.
+
+Solution:
+
+# Check VM annotations
+oc get vmi fedora-multihome -o yaml | grep -A 10 annotations
+
+# Verify Multus is working
+oc get pods -n openshift-multus
+
+# Check VM events for errors
+oc describe vmi fedora-multihome
+Issue 3: Network Connectivity Issues
+Problem: Cannot ping between networks.
+
+Solution:
+
+# Check interface configuration inside VM
+ip addr show
+ip route show
+
+# Verify network policies aren't blocking traffic
+oc get networkpolicy -A
+
+# Check if interfaces are up
+ip link show
+Issue 4: DataVolume Creation Fails
+Problem: DataVolume stuck in pending state.
+
+Solution:
+
+# Check storage class availability
+oc get storageclass
+
+# Check PVC status
+oc get pvc
+
+# Use a different storage class if needed
+# Edit the DataVolume YAML and change storageClassName
+Verification Checklist
+Before concluding the lab, verify the following:
+
+ Multus CNI plugin is installed and running
+ Network attachment definitions are created successfully
+ VM is running with multiple network interfaces
+ All network interfaces inside the VM have IP addresses
+ Connectivity works across all networks
+ Test pods can communicate with the VM on respective networks
+ Network statistics show traffic on all interfaces
+Conclusion
+Congratulations! You have successfully completed Lab 19: Configuring VM Networking for Multihoming.
+
+What You Accomplished
+In this lab, you have:
+
+Installed and configured the Multus CNI plugin - You learned how to work with multiple network interfaces in OpenShift Virtualization using Multus, which allows pods and VMs to attach to multiple networks simultaneously.
+
+Created network attachment definitions - You configured bridge and macvlan networks that provide different networking capabilities for your virtual machines.
+
+Deployed a multihomed virtual machine - You successfully created a VM with three network interfaces: the default pod network, a bridge network, and a macvlan network.
+
+Verified network connectivity - You tested connectivity across all networks and confirmed that the VM can communicate through multiple network paths.
+
+Why This Matters
+Multihoming is crucial in enterprise environments for several reasons:
+
+Network Segmentation: Different applications can use separate networks for security and performance isolation
+High Availability: Multiple network paths provide redundancy and failover capabilities
+Performance Optimization: Traffic can be distributed across multiple networks to avoid bottlenecks
+Compliance Requirements: Regulatory requirements often mandate network separation for different types of data
+Legacy Integration: Existing applications may require specific network configurations that multihoming can accommodate
+Real-World Applications
+The skills you've learned apply to:
+
+Database Servers: Separating management, backup, and client traffic
+Web Applications: Isolating frontend and backend communications
+Storage Systems: Dedicated networks for storage traffic (iSCSI, NFS)
+Security Appliances: Multiple networks for different security zones
+Development Environments: Simulating complex network topologies
+Next Steps
+To further develop your multihoming skills:
+
+Explore advanced CNI plugins like SR-IOV for high-performance networking
+Learn about network policies for securing multihomed environments
+Practice with different network topologies and VLAN configurations
+Study load balancing across multiple network interfaces
+Investigate monitoring and troubleshooting tools for complex network setups
+This lab has provided you with foundational knowledge for managing complex networking scenarios in virtualized environments, a critical skill for modern infrastructure management.

@@ -1,0 +1,14 @@
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora-multihome-dv
+  namespace: vm-multihoming
+spec:
+  source:
+    registry:
+      url: "docker://quay.io/containerdisks/fedora:latest"
+  storage:
+    resources:
+      requests:
+        storage: 10Gi
+    storageClassName: gp3-csi
